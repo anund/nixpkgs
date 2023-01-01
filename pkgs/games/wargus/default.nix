@@ -1,28 +1,20 @@
-{ stdenv, lib, callPackage, fetchFromGitHub
-, requireFile, runCommand, p7zip
-, cmake, pkg-config, makeWrapper
-, zlib, bzip2, libpng
+{ stdenv
+, lib
+, callPackage
+, fetchFromGitHub
+, cmake
+, pkg-config
+, makeWrapper
+, zlib
+, bzip2
+, libpng
 , ffmpeg
+, cdData ? null
+, expansionData ? null
 }:
 
 let
   stratagus = callPackage ./stratagus.nix {};
-
-  dataDownload = requireFile {
-    message = ''
-      Provide a Warcraft II CD-ROM image.
-    '';
-    name = "WC2BTDP01.iso";
-    sha256 = "0wc4wqb9afxykah8lq1jw0sl564j5gs1shrr67cflfsaiscr4qxm";
-  };
-
-  data = runCommand "warcraft2" {
-    buildInputs = [ p7zip ];
-    meta.license = lib.licenses.unfree;
-  } ''
-    7z x ${dataDownload}
-    cp -r DATA $out
-  '';
 
 in
 stdenv.mkDerivation rec {
@@ -48,7 +40,13 @@ stdenv.mkDerivation rec {
     substituteInPlace $out/share/applications/wargus.desktop \
       --replace $out/games/wargus $out/bin/wargus
 
-    $out/bin/wartool -v -r ${data} $out/share/games/stratagus/wargus
+    ${lib.optionalString (cdData != null)
+      ''$out/bin/wartool -v -r ${cdData} $out/share/games/stratagus/wargus''
+    }
+    ${lib.optionalString (expansionData != null)
+      ''$out/bin/wartool -v -r ${expansionData} $out/share/games/stratagus/wargus''
+    }
+    install -Dm755 $out/share/pixmaps/wargus.png $out/share/icons/hicolor/64x64/apps/wargus.png
     ln -s $out/share/games/stratagus/wargus/{contrib/black_title.png,graphics/ui/black_title.png}
   '';
 

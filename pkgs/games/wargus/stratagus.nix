@@ -1,6 +1,20 @@
-{ lib, stdenv, fetchFromGitHub
-, cmake, pkg-config, zlib, bzip2, libpng, lua5_1, toluapp
-, SDL2, SDL2_mixer, SDL2_image, libGL
+{ lib
+, stdenv
+, fetchFromGitHub
+, cmake
+, pkg-config
+, zlib
+, bzip2
+, libpng
+, lua5_1
+, toluapp
+, SDL2
+, SDL2_mixer
+, SDL2_image
+, libGL
+, libtheora
+, libmng
+, doxygen
 }:
 
 stdenv.mkDerivation rec {
@@ -16,12 +30,23 @@ stdenv.mkDerivation rec {
 
   nativeBuildInputs = [ cmake pkg-config ];
   buildInputs = [
-    zlib bzip2 libpng
-    lua5_1 toluapp
-    (lib.getDev SDL2) SDL2_image SDL2_mixer libGL
+    zlib
+    bzip2
+    libpng
+    lua5_1
+    toluapp
+    (lib.getDev SDL2)
+    SDL2_image
+    SDL2_mixer
+    libGL
+    # missing deps?
+    libmng # no idea
+    libtheora # necessary to view ingame videos
+    doxygen # docs? explicitly disable like the stack trace dep?
   ];
   cmakeFlags = [
     "-DCMAKE_CXX_FLAGS=-Wno-error=format-overflow"
+    "-DWITH_STACKTRACE=OFF"
   ];
 
   meta = with lib; {

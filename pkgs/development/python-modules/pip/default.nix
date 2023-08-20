@@ -7,6 +7,7 @@
 , virtualenv
 , pretend
 , pytest
+, installShellFiles
 
 # coupled downsteam dependencies
 , pip-tools
@@ -25,7 +26,10 @@ buildPythonPackage rec {
     name = "${pname}-${version}-source";
   };
 
-  nativeBuildInputs = [ bootstrapped-pip ];
+  nativeBuildInputs = [
+    bootstrapped-pip
+    installShellFiles
+  ];
 
   postPatch = ''
     # Remove vendored Windows PE binaries
@@ -42,6 +46,18 @@ buildPythonPackage rec {
   doCheck = false;
 
   passthru.tests = { inherit pip-tools; };
+
+  postInstall = ''
+    # point pip at it's src
+    PYTHONPATH=$src/src
+
+    # note zsh likely won't work until is closed https://github.com/pypa/pip/issues/12166
+    # --no-cache-dir avoids a warning about being unable to write to .cache
+    installShellCompletion --cmd pip \
+      --bash <($out/bin/pip completion --bash --no-cache-dir) \
+      --fish <($out/bin/pip completion --fish --no-cache-dir) \
+      --zsh <($out/bin/pip completion --zsh --no-cache-dir)
+  '';
 
   meta = {
     description = "The PyPA recommended tool for installing Python packages";

@@ -10,6 +10,10 @@
 , pretend
 , pytest
 
+# docs
+, sphinx
+, myst-parser
+
 # coupled downsteam dependencies
 , pip-tools
 }:
@@ -36,7 +40,39 @@ buildPythonPackage rec {
     installShellFiles
     setuptools
     wheel
+
+    # docs
+    sphinx
+    myst-parser
   ];
+
+  outputs = [
+    "out"
+    "man"
+  ];
+
+  # pip uses a custom sphinx extension and unusual conf.py location, mimic the internal build rather than attempting
+  # to fit sphinxHook see https://github.com/pypa/pip/blob/0778c1c153da7da457b56df55fb77cbba08dfb0c/noxfile.py#L129-L148
+  postBuild = ''
+    cd docs
+    # remove intersphinx extension as it reaches out to the internet and is not needed for man page generation
+    substituteInPlace html/conf.py --replace '"sphinx.ext.intersphinx",' ""
+
+    # remove sphinx extensions not used in man generation
+    # towncrier is not currently packaged in nixpkgs
+    substituteInPlace html/conf.py --replace '"sphinx_copybutton",' ""
+    substituteInPlace html/conf.py --replace '"sphinx_inline_tabs",' ""
+    substituteInPlace html/conf.py --replace '"sphinxcontrib.towncrier",' ""
+
+    PYTHONPATH=$src/src:$PYTHONPATH sphinx-build -v \
+      -d build/doctrees/man \
+      -c html \
+      -d build/doctrees/man \
+      -b man \
+      man \
+      build/man
+    cd ..
+  '';
 
   nativeCheckInputs = [ mock scripttest virtualenv pretend pytest ];
 
@@ -44,6 +80,8 @@ buildPythonPackage rec {
   doCheck = false;
 
   postInstall = ''
+    installManPage docs/build/man/*
+
     installShellCompletion --cmd pip \
       --bash <($out/bin/pip completion --bash) \
       --fish <($out/bin/pip completion --fish) \

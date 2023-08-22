@@ -8,7 +8,7 @@
 , pythonOlder
 , buildPythonPackage
 , pypaBuildHook
-, pipInstallHook
+, pypaInstallHook
 , cython
 , gfortran
 , meson-python
@@ -88,7 +88,7 @@ in buildPythonPackage {
 
   nativeBuildInputs = [
     pypaBuildHook
-    pipInstallHook
+    pypaInstallHook
     cython
     gfortran
     meson-python

@@ -59,7 +59,7 @@ python3.pkgs.buildPythonApplication rec {
   '';
 
   postInstall = ''
-    cp -a share $out/
+    cp -r share $out
   '';
 
   passthru.tests.version = testers.testVersion {

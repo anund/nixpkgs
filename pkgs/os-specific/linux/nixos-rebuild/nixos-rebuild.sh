@@ -429,13 +429,13 @@ if [[ ! -z "$specialisation" && ! "$action" = switch && ! "$action" = test ]]; t
     exit 1
 fi
 
-tmpDir=$(mktemp -t -d nixos-rebuild.XXXXXX)
+tmpDir=$(mktemp -p "@tmpdir@" -d nixos-rebuild.XXXXXX)
 
 if [[ ${#tmpDir} -ge 60 ]]; then
     # Very long tmp dirs lead to "too long for Unix domain socket"
     # SSH ControlPath errors. Especially macOS sets long TMPDIR paths.
     rmdir "$tmpDir"
-    tmpDir=$(TMPDIR= mktemp -t -d nixos-rebuild.XXXXXX)
+    tmpDir=$(mktemp -p "@tmpdir@" -d nixos-rebuild.XXXXXX)
 fi
 
 cleanup() {

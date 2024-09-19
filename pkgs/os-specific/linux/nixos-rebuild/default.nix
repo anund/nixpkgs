@@ -12,6 +12,7 @@
 , installShellFiles
 , binlore
 , nixos-rebuild
+, tmpdir ? "/tmp"
 }:
 let
   fallback = import ./../../../../nixos/modules/installer/tools/nix-fallback-paths.nix;
@@ -29,6 +30,7 @@ substitute {
     "--subst-var-by" "nix_i686_linux" fallback.i686-linux
     "--subst-var-by" "nix_aarch64_linux" fallback.aarch64-linux
     "--subst-var-by" "path" (lib.makeBinPath [ coreutils gnused gnugrep jq util-linux ])
+    "--subst-var-by" "tmpdir" tmpdir
   ];
 
   nativeBuildInputs = [

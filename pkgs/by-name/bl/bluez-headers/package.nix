@@ -2,6 +2,7 @@
   lib,
   stdenv,
   fetchurl,
+  fetchpatch,
 }:
 
 # This package only provides the bluetooth headers from the bluez package
@@ -19,6 +20,18 @@ stdenv.mkDerivation (finalAttrs: {
     url = "mirror://kernel/linux/bluetooth/bluez-${finalAttrs.version}.tar.xz";
     hash = "sha256-mfFEVAxgcFkeTFO8uXfrQmZMYrezbLNaKc9y3tM5Yh0=";
   };
+
+  patches = [
+    # can be removed after an update to 5.87
+    (fetchpatch {
+      url = "https://github.com/bluez/bluez/commit/b33e923b55e4d0e9d78a83cfcb541fd1f687ef54.patch";
+      hash = "sha256-tp9cLBvCAyDThTuJ3rJXxwSQIAoM+qIJGnshA6wnncI=";
+    })
+    (fetchpatch {
+      url = "https://github.com/bluez/bluez/commit/21e13976f2e375d701b8b7032ba5c1b2e56c305f.patch";
+      hash = "sha256-Tq4O+heetVJG3I2Bm2PnXT8pVvqcAPXOQpzeyQwomrY=";
+    })
+  ];
 
   dontConfigure = true;
   dontBuild = true;

@@ -16,6 +16,9 @@ in
         Whether to enable the Profile Sync daemon.
       '';
     };
+
+    package = lib.mkPackageOption pkgs "profile-sync-daemon" { };
+
     resyncTimer = lib.mkOption {
       type = str;
       default = "1h";
@@ -39,22 +42,19 @@ in
             description = "Profile Sync daemon";
             wants = [ "psd-resync.service" ];
             wantedBy = [ "default.target" ];
-            path = with pkgs; [
-              rsync
-              kmod
-              gawk
-              net-tools
-              util-linux
-              profile-sync-daemon
-            ];
+            bindsTo = [ "psd.service" ];
             unitConfig = {
               RequiresMountsFor = [ "/home/" ];
+            };
+            environment = {
+              LAUNCHED_BY_SYSTEMD = "1";
             };
             serviceConfig = {
               Type = "oneshot";
               RemainAfterExit = "yes";
-              ExecStart = "${pkgs.profile-sync-daemon}/bin/profile-sync-daemon sync";
-              ExecStop = "${pkgs.profile-sync-daemon}/bin/profile-sync-daemon unsync";
+              ExecStart = "${cfg.package}/bin/profile-sync-daemon startup";
+              ExecStartPost = "${cfg.package}/bin/profile-sync-daemon resync";
+              ExecStop = "${cfg.package}/bin/profile-sync-daemon unsync";
             };
           };
 
@@ -62,30 +62,22 @@ in
             enable = true;
             description = "Timed profile resync";
             after = [ "psd.service" ];
+            bindsTo = [ "psd.service" ];
             wants = [ "psd-resync.timer" ];
-            partOf = [ "psd.service" ];
             wantedBy = [ "default.target" ];
-            path = with pkgs; [
-              rsync
-              kmod
-              gawk
-              net-tools
-              util-linux
-              profile-sync-daemon
-            ];
+            environment = {
+              LAUNCHED_BY_SYSTEMD = "1";
+            };
             serviceConfig = {
               Type = "oneshot";
-              ExecStart = "${pkgs.profile-sync-daemon}/bin/profile-sync-daemon resync";
+              ExecStart = "${cfg.package}/bin/profile-sync-daemon resync";
             };
           };
         };
 
         timers.psd-resync = {
           description = "Timer for profile sync daemon - ${cfg.resyncTimer}";
-          partOf = [
-            "psd-resync.service"
-            "psd.service"
-          ];
+          bindsTo = [ "psd.service" ];
 
           timerConfig = {
             OnUnitActiveSec = "${cfg.resyncTimer}";

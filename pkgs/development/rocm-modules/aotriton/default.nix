@@ -37,24 +37,25 @@ let
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "aotriton${lib.optionalString (!anySupportedTargets) "-shim"}";
-  version = "0.11.1b";
+  version = "0.12b";
 
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "aotriton";
     tag = finalAttrs.version;
-    hash = "sha256-F7JjyS+6gMdCpOFLldTsNJdVzzVwd6lwW7+V8ZOZfig=";
+    hash = "sha256-HVahdCVvLRqwLIZy2sCCvYCXOav6lqoXCs5bmVLr49E=";
     leaveDotGit = true;
-    # fetch all submodules except unused triton submodule that is ~500MB
-    postFetch = ''
-      cd $out
-      git reset --hard HEAD
-      for submodule in $(git config --file .gitmodules --get-regexp path | awk '{print $2}' | grep '^third_party/' | grep -v '^third_party/triton$'); do
-        git submodule update --init --recursive "$submodule"
-      done
-      find "$out" -name .git -print0 | xargs -0 rm -rf
-    '';
+    # for reference false is the default, setting it here to document upstream has an unused triton submodule that is ~500MB we don't want to download.
+    fetchSubmodules = false;
   };
+
+  patches = [
+    ./aiter-no-git-checkout.patch
+  ];
+
+  postPatch = ''
+    ln -s ${python3.pkgs.amd-aiter.src} third_party/aiter
+  '';
 
   cmakeBuildType = "RelWithDebInfo";
   separateDebugInfo = true;
@@ -69,6 +70,7 @@ stdenv.mkDerivation (finalAttrs: {
     CFLAGS = "-w -g1 -gz -Wno-c++11-narrowing";
     CXXFLAGS = finalAttrs.env.CFLAGS;
     TRITON_STORE_BINARY_ONLY = 1; # reduce triton disk space usage
+    AOTRITON_GIT_TREESHA1 = "35bfbd0ebe2fd774e97cdc12421592c23f59abfe"; # git rev-parse 'HEAD^{tree}'
   };
 
   nativeBuildInputs = [

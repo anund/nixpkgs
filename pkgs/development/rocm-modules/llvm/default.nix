@@ -314,7 +314,8 @@ overrideLlvmPackagesRocm (s: {
         hash = "sha256-6Pj3pRESaho60YhXWwaQxEKteSuziZseeT4FbZqZANk=";
       })
     ]
-    ++ old.patches
+    # patch appears to require llvm > 22.0.0, introduced in https://github.com/NixOS/nixpkgs/pull/564039 against llvm 22.1.8
+    ++ (lib.filter (p: !(lib.hasSuffix "backport-minimal-arm64e_x1-support.patch" (baseNameOf (toString p)))) old.patches)
     ++ [
       ./perf-increase-namestring-size.patch
       # v64i8 shuffle lowering inf loop on VBMI targets, hangs whisper-cpp etc

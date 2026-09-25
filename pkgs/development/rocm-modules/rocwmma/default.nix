@@ -18,7 +18,7 @@
 }:
 
 stdenv.mkDerivation (finalAttrs: {
-  pname = "rocwmma";
+  pname = "rocwmma${clr.cubgpuArchSuffix}";
   version = "7.2.3";
 
   outputs = [

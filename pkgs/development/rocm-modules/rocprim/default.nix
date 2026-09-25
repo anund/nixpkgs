@@ -14,7 +14,7 @@
 }:
 
 stdenv.mkDerivation (finalAttrs: {
-  pname = "rocprim";
+  pname = "rocprim${clr.cubgpuArchSuffix}";
   version = "7.2.3";
 
   outputs = [

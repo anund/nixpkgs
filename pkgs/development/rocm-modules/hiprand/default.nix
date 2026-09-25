@@ -13,7 +13,7 @@
 }:
 
 stdenv.mkDerivation (finalAttrs: {
-  pname = "hiprand";
+  pname = "hiprand${clr.cubgpuArchSuffix}";
   version = "7.2.3";
 
   outputs = [

@@ -21,7 +21,7 @@
 }:
 
 stdenv.mkDerivation (finalAttrs: {
-  pname = "rocalution";
+  pname = "rocalution${clr.cubgpuArchSuffix}";
   version = "7.2.3";
 
   outputs = [

@@ -35,7 +35,7 @@
   writableTmpDirAsHomeHook,
   buildDocs ? false,
   buildTests ? false,
-  gpuTargets ? clr.gpuTargets,
+  gpuTargets ? clr.localGpuTargets or clr.gpuTargets,
 }:
 
 let
@@ -58,7 +58,7 @@ let
   );
 in
 stdenv.mkDerivation (finalAttrs: {
-  pname = "migraphx";
+  pname = "migraphx${clr.cubgpuArchSuffix}";
   version = "7.2.3";
 
   outputs = [

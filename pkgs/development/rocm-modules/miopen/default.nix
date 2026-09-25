@@ -119,7 +119,7 @@ let
 in
 stdenv.mkDerivation (finalAttrs: {
   inherit version;
-  pname = "miopen";
+  pname = "miopen${clr.cubgpuArchSuffix}";
 
   src = fetchFromGitHub {
     owner = "ROCm";

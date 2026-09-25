@@ -18,7 +18,7 @@
 
 # This can also use cuSPARSE as a backend instead of rocSPARSE
 stdenv.mkDerivation (finalAttrs: {
-  pname = "hipsparse";
+  pname = "hipsparse${clr.cubgpuArchSuffix}";
   version = "7.2.3";
 
   outputs = [

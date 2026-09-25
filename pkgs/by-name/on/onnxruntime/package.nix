@@ -334,7 +334,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
   ]
   ++ lib.optionals rocmSupport [
     (lib.cmakeFeature "CMAKE_HIP_ARCHITECTURES" (
-      builtins.concatStringsSep ";" rocmPackages.clr.localGpuTargets or rocmPackages.clr.gpuTargets
+      builtins.concatStringsSep ";" (rocmPackages.clr.localGpuTargets or rocmPackages.clr.gpuTargets)
     ))
     (lib.cmakeFeature "onnxruntime_ROCM_HOME" "${rocmPackages.clr}")
     # Incompatible with packaged version, far too slow to build vendored version

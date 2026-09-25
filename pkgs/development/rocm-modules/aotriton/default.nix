@@ -36,7 +36,7 @@ let
     if anySupportedTargets then lib.concatStringsSep ";" supportedTargets else "gfx1200";
 in
 stdenv.mkDerivation (finalAttrs: {
-  pname = "aotriton${lib.optionalString (!anySupportedTargets) "-shim"}";
+  pname = "aotriton${lib.optionalString (!anySupportedTargets) "-shim"}${clr.cubgpuArchSuffix}";
   version = "0.11.1b";
 
   src = fetchFromGitHub {

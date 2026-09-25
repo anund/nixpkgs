@@ -20,8 +20,8 @@
   filecheck,
   buildPackages,
   rocmPackages ? { },
-  rocmGpuTargets ? lib.optionalString (rocmPackages ? clr.gpuTargets) (
-    builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets
+  rocmGpuTargets ? builtins.concatStringsSep ";" (
+    rocmPackages.clr.localGpuTargets or rocmPackages.clr.gpuTargets
   ),
   cudaPackages ? { },
   intel-llvm-src,

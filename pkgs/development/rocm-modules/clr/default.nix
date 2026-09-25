@@ -31,7 +31,7 @@
   khronos-ocl-icd-loader,
   gcc-unwrapped,
   writeShellScriptBin,
-  localGpuTargets ? null,
+  localGpuTargets ? [ "gfx900" ],
 }:
 
 let

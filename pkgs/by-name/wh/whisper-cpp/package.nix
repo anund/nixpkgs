@@ -22,7 +22,9 @@
 
   rocmSupport ? config.rocmSupport,
   rocmPackages ? { },
-  rocmGpuTargets ? builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets,
+  rocmGpuTargets ? builtins.concatStringsSep ";" (
+    rocmPackages.clr.localGpuTargets or rocmPackages.clr.gpuTargets
+  ),
 
   vulkanSupport ? false,
   shaderc,

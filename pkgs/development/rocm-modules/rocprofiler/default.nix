@@ -21,7 +21,7 @@
   mpi,
   gtest,
   python3Packages,
-  gpuTargets ? clr.gpuTargets,
+  gpuTargets ? clr.localGpuTargets or clr.gpuTargets,
 }:
 
 let
@@ -43,7 +43,7 @@ let
   };
 in
 stdenv.mkDerivation (finalAttrs: {
-  pname = "rocprofiler";
+  pname = "rocprofiler${clr.cubgpuArchSuffix}";
   version = "7.2.3";
 
   src = fetchFromGitHub {
@@ -90,13 +90,13 @@ stdenv.mkDerivation (finalAttrs: {
   cmakeFlags = [
     "-DCMAKE_MODULE_PATH=${clr}/lib/cmake/hip"
     "-DHIP_ROOT_DIR=${clr}"
-    "-DGPU_TARGETS=${lib.concatStringsSep ";" gpuTargets}"
     # Manually define CMAKE_INSTALL_<DIR>
     # See: https://github.com/NixOS/nixpkgs/pull/197838
     "-DCMAKE_INSTALL_BINDIR=bin"
     "-DCMAKE_INSTALL_LIBDIR=lib"
     "-DCMAKE_INSTALL_INCLUDEDIR=include"
-  ];
+  ]
+  ++ lib.optionals (gpuTargets != [ ]) [ "-DGPU_TARGETS=${lib.concatStringsSep ";" gpuTargets}" ];
 
   postPatch = ''
     patchShebangs .

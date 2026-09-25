@@ -33,7 +33,7 @@ stdenv.mkDerivation (finalAttrs: {
     "mivisionx-"
     + (
       if (!useOpenCL && !useCPU) then
-        "hip"
+        "hip${clr.cubgpuArchSuffix}"
       else if (!useOpenCL && !useCPU) then
         "opencl"
       else

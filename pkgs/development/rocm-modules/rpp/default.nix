@@ -17,7 +17,7 @@
 }:
 
 stdenv.mkDerivation (finalAttrs: {
-  pname = "rpp-${if useCPU then "cpu" else "hip"}";
+  pname = "rpp-${if useCPU then "cpu" else "hip${clr.cubgpuArchSuffix}"}";
 
   version = "7.2.3";
 

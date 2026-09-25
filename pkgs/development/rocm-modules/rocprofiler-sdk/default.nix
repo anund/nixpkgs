@@ -45,7 +45,7 @@
 
 # rocprofiler-sdk is the home of rocprofv3
 stdenv.mkDerivation (finalAttrs: {
-  pname = "rocprofiler-sdk";
+  pname = "rocprofiler-sdk${clr.cubgpuArchSuffix}";
   version = "7.2.3";
 
   outputs = [

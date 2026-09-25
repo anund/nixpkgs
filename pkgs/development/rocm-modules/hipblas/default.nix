@@ -23,7 +23,7 @@
 
 # Can also use cuBLAS
 stdenv.mkDerivation (finalAttrs: {
-  pname = "hipblas";
+  pname = "hipblas${clr.gpuArchSuffix}";
   version = "7.2.3";
 
   outputs = [

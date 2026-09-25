@@ -14,7 +14,7 @@
 }:
 
 stdenv.mkDerivation (finalAttrs: {
-  pname = "rocthrust";
+  pname = "rocthrust${clr.cubgpuArchSuffix}";
   version = "7.2.3";
 
   outputs = [

@@ -1,5 +1,5 @@
 {
-  stdenv,
+  gcc15stdenv,
   lib,
   fetchFromGitHub,
   fetchFromGitLab,
@@ -69,7 +69,7 @@
   hypothesis,
   psutil,
   # ROCm build and `torch.compile` requires `triton`
-  tritonSupport ? (!stdenv.hostPlatform.isDarwin),
+  tritonSupport ? (!gcc15stdenv.hostPlatform.isDarwin),
   triton,
 
   # TODO: 1. callPackage needs to learn to distinguish between the task
@@ -85,7 +85,7 @@
 
   # Disable MKLDNN on aarch64-darwin, it negatively impacts performance,
   # this is also what official pytorch build does
-  mklDnnSupport ? !(stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isAarch64),
+  mklDnnSupport ? !(gcc15stdenv.hostPlatform.isDarwin && gcc15stdenv.hostPlatform.isAarch64),
 
   # virtual pkg that consistently instantiates blas across nixpkgs
   # See https://github.com/NixOS/nixpkgs/pull/83888
@@ -115,6 +115,8 @@ let
     trivial
     ;
   inherit (cudaPackages) cudnn flags nccl;
+
+  stdenv = gcc15stdenv;
 
   triton = throw "python3Packages.torch: use _tritonEffective instead of triton to avoid divergence";
 

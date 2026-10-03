@@ -38,7 +38,9 @@
 
   hipSupport ? false,
   rocmPackages,
-  rocmGpuTargets ? builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets,
+  rocmGpuTargets ? builtins.concatStringsSep ";" (
+    rocmPackages.clr.localGpuTargets or rocmPackages.clr.gpuTargets
+  ),
 
   waylandSupport ? stdenv.hostPlatform.isLinux,
   waylandRuntimePackages ? [

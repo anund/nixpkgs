@@ -1856,6 +1856,7 @@ with pkgs;
 
   rocmPackages = rocmPackages_7;
   rocmPackages_7 = recurseIntoAttrs (callPackage ../development/rocm-modules/7 { });
+  rocmPackages_10 = recurseIntoAttrs (callPackage ../development/rocm-modules/10 { });
 
   tsm-client-withGui = callPackage ../by-name/ts/tsm-client/package.nix { enableGui = true; };
 

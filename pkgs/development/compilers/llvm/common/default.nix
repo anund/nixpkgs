@@ -223,6 +223,7 @@ makeScopeWithSplicing' {
         libcxx = null;
         extraPackages = [ targetLlvmPackages.compiler-rt ];
         extraBuildCommands = mkExtraBuildCommands cc;
+        name = "libstdcxxClang";
       };
 
       libcxxClang = wrapCCWith rec {
@@ -230,6 +231,7 @@ makeScopeWithSplicing' {
         libcxx = targetLlvmPackages.libcxx;
         extraPackages = [ targetLlvmPackages.compiler-rt ];
         extraBuildCommands = mkExtraBuildCommands cc;
+        name = "libcxxClang";
       };
 
       # Darwin uses the system libc++ by default. It is set up as its own clang definition so that `libcxxClang`
@@ -239,6 +241,7 @@ makeScopeWithSplicing' {
         libcxx = darwin.libcxx;
         extraPackages = [ targetLlvmPackages.compiler-rt ];
         extraBuildCommands = mkExtraBuildCommands cc;
+        name = "systemLibcxxClang";
       };
 
       lld = callPackage ./lld { };
@@ -275,15 +278,18 @@ makeScopeWithSplicing' {
       bintools-unwrapped = callPackage ./bintools.nix { };
 
       bintoolsNoLibc = wrapBintoolsWith {
+        name = "bintoolsNoLibc";
         bintools = self.bintools-unwrapped;
         libc = targetPackages.preLibcHeaders or preLibcHeaders;
       };
 
       bintools = wrapBintoolsWith {
+        name = "bintools";
         bintools = self.bintools-unwrapped;
       };
 
       clangUseLLVM = wrapCCWith rec {
+        name = "clangUseLLVM";
         cc = self.clang-unwrapped;
         libcxx = targetLlvmPackages.libcxx;
         bintools = bintools';
@@ -316,6 +322,7 @@ makeScopeWithSplicing' {
       };
 
       clangWithLibcAndBasicRtAndLibcxx = wrapCCWith rec {
+        name = "clangWithLibcAndBasicRtAndLibcxx";
         cc = self.clang-unwrapped;
         # This is used to build compiler-rt. Make sure to use the system libc++ on Darwin.
         #
@@ -355,6 +362,7 @@ makeScopeWithSplicing' {
       };
 
       clangWithLibcAndBasicRt = wrapCCWith rec {
+        name = "clangWithLibcAndBasicRt";
         cc = self.clang-unwrapped;
         libcxx = null;
         bintools = bintools';
@@ -369,6 +377,7 @@ makeScopeWithSplicing' {
       };
 
       clangNoLibcWithBasicRt = wrapCCWith rec {
+        name = "clangNoCompilerRt";
         cc = self.clang-unwrapped;
         libcxx = null;
         bintools = bintoolsNoLibc';
@@ -382,6 +391,7 @@ makeScopeWithSplicing' {
       };
 
       clangNoLibcNoRt = wrapCCWith rec {
+        name = "clangNoLibcNoRt";
         cc = self.clang-unwrapped;
         libcxx = null;
         bintools = bintoolsNoLibc';
@@ -394,6 +404,7 @@ makeScopeWithSplicing' {
       # This is an "oddly ordered" bootstrap just for Darwin. Probably
       # don't want it otherwise.
       clangNoCompilerRtWithLibc = wrapCCWith rec {
+        name = "clangNoCompilerRtWithLibc";
         cc = self.clang-unwrapped;
         libcxx = null;
         bintools = bintools';
@@ -413,9 +424,9 @@ makeScopeWithSplicing' {
           stdenv =
             # Darwin needs to use a bootstrap stdenv to avoid an infinite recursion when cross-compiling.
             if args.stdenv.hostPlatform.isDarwin then
-              overrideCC darwin.bootstrapStdenv buildLlvmPackages.clangWithLibcAndBasicRtAndLibcxx
+              (overrideCC darwin.bootstrapStdenv buildLlvmPackages.clangWithLibcAndBasicRtAndLibcxx).override{ name = "stdenv-darwin"; }
             else if args.stdenv.hostPlatform.useLLVM or false then
-              overrideCC args.stdenv buildLlvmPackages.clangWithLibcAndBasicRtAndLibcxx
+              (overrideCC args.stdenv buildLlvmPackages.clangWithLibcAndBasicRtAndLibcxx).override{ name = "stdenv-llvm"; }
             else
               args.stdenv;
         in
@@ -455,16 +466,16 @@ makeScopeWithSplicing' {
         else
           self.compiler-rt-libc;
 
-      stdenv = overrideCC stdenv buildLlvmPackages.clang;
+      stdenv = (overrideCC stdenv buildLlvmPackages.clang).override{ name = "stdenv-base";};
 
       libcxxStdenv = overrideCC stdenv buildLlvmPackages.libcxxClang;
 
       libcxx = callPackage ./libcxx {
         stdenv =
           if stdenv.hostPlatform.isDarwin then
-            overrideCC darwin.bootstrapStdenv buildLlvmPackages.clangWithLibcAndBasicRt
+            (overrideCC darwin.bootstrapStdenv buildLlvmPackages.clangWithLibcAndBasicRt).override{ name = "stdenv-libcxx-darwin"; }
           else
-            overrideCC stdenv buildLlvmPackages.clangWithLibcAndBasicRt;
+            (overrideCC stdenv buildLlvmPackages.clangWithLibcAndBasicRt).override{ name = "stdenv-clang"; };
       };
 
       libunwind = callPackage ./libunwind {
@@ -518,6 +529,7 @@ makeScopeWithSplicing' {
         flang =
           let
             wrapped = wrapCCWith rec {
+              name = "flang";
               cc = flangUnwrapped;
               bintools = bintools';
               extraPackages = [ targetLlvmPackages.flang-rt ];

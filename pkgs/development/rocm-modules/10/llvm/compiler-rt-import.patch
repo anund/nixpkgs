@@ -1,0 +1,24 @@
+diff --git a/lib/orc/elfnix_platform.cpp b/lib/orc/elfnix_platform.cpp
+--- a/lib/orc/elfnix_platform.cpp
++++ b/lib/orc/elfnix_platform.cpp
+@@ -19,6 +19,8 @@
+ #include "wrapper_function_utils.h"
+ 
+ #include <algorithm>
++#include <iterator>
++#include <set>
+ #include <map>
+ #include <mutex>
+ #include <sstream>
+diff --git a/lib/orc/record_section_tracker.h b/lib/orc/record_section_tracker.h
+--- a/lib/orc/record_section_tracker.h
++++ b/lib/orc/record_section_tracker.h
+@@ -17,6 +17,8 @@
+ #include "error.h"
+ #include "executor_address.h"
+ #include <algorithm>
++#include <iterator>
++#include <set>
+ #include <vector>
+ 
+ namespace orc_rt {

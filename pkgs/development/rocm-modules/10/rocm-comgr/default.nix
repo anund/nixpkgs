@@ -34,15 +34,6 @@ stdenv.mkDerivation (finalAttrs: {
       url = "https://github.com/GZGavinZhao/rocm-llvm-project/commit/7002dc04863d38c57cfd2e6fc60a1cf5a613fd8e.patch";
       relative = "amd/comgr";
     })
-    # [Comgr] Extend ISA compatibility for CCOB
-    (fetchpatch {
-      hash = "sha256-/50I+PqxL3oaQMqg5vR7+ibUcXO1SvfXBdw/sybRt1o=";
-      url = "https://github.com/GZGavinZhao/rocm-llvm-project/commit/2c1e44fc3eacadcafdd4ada3e3184a092b6f26c5.patch";
-      relative = "amd/comgr";
-    })
-    # Fix: CCOB compat patch used coerced (featureless) name for output filename,
-    # causing CLR's code_obj_map key to miss when looking up device ISA with features
-    ./fix-ccob-compat-output-filename.patch
   ];
 
   postPatch =
@@ -55,7 +46,7 @@ stdenv.mkDerivation (finalAttrs: {
     + ''
       substituteInPlace src/comgr-env.cpp \
         --replace-fail \
-          'return EnvLLVMPath;' \
+          'return EnvLLVMPath ? EnvLLVMPath : "";' \
           'return EnvLLVMPath ? EnvLLVMPath : "${llvm.rocm-toolchain}";'
     '';
 

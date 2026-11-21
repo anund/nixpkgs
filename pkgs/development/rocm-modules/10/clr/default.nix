@@ -70,7 +70,7 @@ let
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "clr";
-  version = "7.2.4";
+  version = "10.0";
 
   outputs = [
     "out"
@@ -83,12 +83,12 @@ stdenv.mkDerivation (finalAttrs: {
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "rocm-systems";
-    tag = "rocm-${finalAttrs.version}";
+    tag = "therock-${finalAttrs.version}";
     sparseCheckout = [
       "projects/clr"
       "shared"
     ];
-    hash = "sha256-//cQBKlSB9uSP4fBgJpI1FxnqlzyQN913CHVGa2tqv8=";
+    hash = "sha256-MKgP9xrSz/1cRrBYUR669wja6XojKOj5Qp/GEvaUM7Q=";
   };
   sourceRoot = "${finalAttrs.src.name}/projects/clr";
 
@@ -212,6 +212,11 @@ stdenv.mkDerivation (finalAttrs: {
     ln -s ${rocminfo}/bin/* $out/bin
     ln -s ${rocm-core}/include/* $out/include/
 
+    # Upstream installs opencl in /etc to support their CI, remove it from $out
+    # https://github.com/ROCm/rocm-systems/blob/therock-10.1/projects/clr/opencl/CMakeLists.txt#L124-L143
+    rm -r $out/etc/OpenCL  $out/etc/ld.so.conf.d
+    rmdir $out/etc
+
     # Replace rocm-opencl-icd functionality
     mkdir -p $icd/etc/OpenCL/vendors
     echo "$out/lib/libamdocl64.so" > $icd/etc/OpenCL/vendors/amdocl64.icd
@@ -238,33 +243,37 @@ stdenv.mkDerivation (finalAttrs: {
   passthru = {
     # All known and valid general GPU targets
     # We cannot use this for each ROCm library, as each defines their own supported targets
-    # See: https://github.com/ROCm/ROCm/blob/77cbac4abab13046ee93d8b5bf410684caf91145/README.md#library-target-matrix
+    # See:
+    # https://rocm.docs.amd.com/en/docs-10.0.0/compatibility/compatibility-matrix.html?fam=instinct&gpu=amd-instinct-mi355x&os=ubuntu&gfx=gfx950
+    # https://github.com/ROCm/rocm-docs/blob/docs/10.0.0/docs/data/gpus.yaml
     gpuTargets = lib.forEach [
       # "9-generic" # can handle all Vega variants
-      "900" # MI25, Vega 56/64
+      # "900" # MI25, Vega 56/64
       # "902" # Vega 8
       # "909" # Renoir Vega APU
       # "90c" # Renoir Vega APU
       # Past this point cards need their own kernels for perf despite gfx9-generic compat
-      "906" # MI50/60, Radeon VII - adds dot product & mixed precision FMA ops
-      "908" # MI100 - adds MFMA (matrix fused multiply-add) ops
+      #"906" # MI50/60, Radeon VII - adds dot product & mixed precision FMA ops
+      #"908" # MI100 - adds MFMA (matrix fused multiply-add) ops
       "90a" # MI210/MI250 - additional MFMA variants
       # "9-4-generic" - since only 942 is valid for 6.4 target it directly
       # 940/1 - never released publicly, maybe HPE cray specific MI3xx?
       "942" # MI300A/X, MI325X
       "950" # MI350X, MI355X
       # "10-1-generic" # fine for all RDNA1 cards
-      "1010"
+      #"1010"
       # "10-3-generic"
       "1030" # W6800, various Radeon cards
       # 1100 through 1103 = RDNA3
       # "11-generic" # will handle 7600, hopefully ryzen AI series iGPUs
-      "1100"
-      "1101"
-      "1102"
+      "1100" # RX 7900
+      "1101" # RX 7700/7800
+      "1102" # RX 7600
       "1103" # RDNA3 iGPU like Radeon 780M
       "1150" # Strix Point
       "1151" # Strix Halo
+      "1152" # Kraken Point/Gorgon Point
+      "1153" # Gorgon Point
       # "12-generic"
       "1200" # RX 9060
       "1201" # RX 9070 + XT
@@ -275,7 +284,8 @@ stdenv.mkDerivation (finalAttrs: {
     updateScript = rocmUpdateScript { inherit finalAttrs; };
 
     impureTests = {
-      # bash $(nix-build -A rocmPackages.clr.impureTests.rocm-smi)
+      # bash $(nix-build -A rocmPackages<version>.clr.impureTests.rocm-smi)
+      # run from nixpkgs root directory
       rocm-smi = callPackage ./test-rocm-smi.nix {
         inherit rocm-smi;
         clr = finalAttrs.finalPackage;

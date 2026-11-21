@@ -57,9 +57,9 @@ let
         inherit (llvm) clang;
       };
 
-      #  rocm-runtime = self.callPackage ./rocm-runtime {
-      #    stdenv = origStdenv;
-      #  };
+      rocm-runtime = self.callPackage ./rocm-runtime {
+        stdenv = origStdenv;
+      };
 
       rocm-smi = pyPackages.callPackage ./rocm-smi {
         inherit (self) rocmUpdateScript;

@@ -5,7 +5,7 @@
   newScope,
   #boost179,
   #opencv,
-  #python3Packages,
+  python3Packages,
   #openmpi,
   stdenv,
   pkgs,
@@ -17,7 +17,7 @@ let
     let
       inherit (self) llvm;
       origStdenv = stdenv;
-      #pyPackages = python3Packages;
+      pyPackages = python3Packages;
       #openmpi-orig = openmpi;
       rocmClangStdenv = llvm.rocmClangStdenv;
     in
@@ -61,9 +61,9 @@ let
       #    stdenv = origStdenv;
       #  };
 
-      #  rocm-smi = pyPackages.callPackage ./rocm-smi {
-      #    inherit (self) rocmUpdateScript;
-      #  };
+      rocm-smi = pyPackages.callPackage ./rocm-smi {
+        inherit (self) rocmUpdateScript;
+      };
 
       #  roctracer = self.callPackage ./roctracer { };
 

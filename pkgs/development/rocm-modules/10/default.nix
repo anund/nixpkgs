@@ -67,7 +67,7 @@ let
 
       #  roctracer = self.callPackage ./roctracer { };
 
-      #  hip-common = self.callPackage ./hip-common { };
+      hip-common = self.callPackage ./hip-common { };
 
       #  clr = self.callPackage ./clr { };
     }

@@ -47,7 +47,7 @@ let
     }
     ## clr ##
     // {
-      #  rocm-cmake = self.callPackage ./rocm-cmake { stdenv = origStdenv; };
+      rocm-cmake = self.callPackage ./rocm-cmake { stdenv = origStdenv; };
 
       rocm-core = self.callPackage ./rocm-core { stdenv = origStdenv; };
 

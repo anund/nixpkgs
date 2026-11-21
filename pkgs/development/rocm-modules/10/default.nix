@@ -250,9 +250,9 @@ let
       #  rocmPackages = self;
       #};
 
-      #rocm-tests = self.callPackage ./rocm-tests {
-      #  rocmPackages = self;
-      #};
+      rocm-tests = self.callPackage ./rocm-tests {
+        rocmPackages = self;
+      };
     }
     ## legacy aliases ##
     // lib.optionalAttrs config.allowAliases {

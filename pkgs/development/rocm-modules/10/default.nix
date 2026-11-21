@@ -49,7 +49,7 @@ let
     // {
       #  rocm-cmake = self.callPackage ./rocm-cmake { stdenv = origStdenv; };
 
-      #  rocm-core = self.callPackage ./rocm-core { stdenv = origStdenv; };
+      rocm-core = self.callPackage ./rocm-core { stdenv = origStdenv; };
 
       #  rocminfo = self.callPackage ./rocminfo { stdenv = origStdenv; };
 

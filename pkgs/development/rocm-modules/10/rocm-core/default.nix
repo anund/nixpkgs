@@ -13,21 +13,26 @@
 # - provide rocm version info and path to rocm version headers
 # only the last usage makes sense in nixpkgs
 let
-  padIfSingle = s: if lib.stringLength s == 1 then "0${s}" else s;
+  padVersion = version: lib.versions.pad 3 version;
+  buildVersion = version:
+    let
+      padIfSingle = s: if lib.stringLength s == 1 then "0${s}" else s;
+    in
+      "${lib.versions.major version}${padIfSingle (lib.versions.minor version)}${padIfSingle (lib.versions.patch version)}";
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "rocm-core";
-  version = "7.2.4";
+  version = "10.0";
 
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "rocm-systems";
-    tag = "rocm-${finalAttrs.version}";
+    tag = "therock-${finalAttrs.version}";
     sparseCheckout = [
       "projects/rocm-core"
       "shared"
     ];
-    hash = "sha256-Y3WuDwruD5zKN2epwfUCZAGq5vgxCT27awJN8JxmOsY=";
+    hash = "sha256-7rPhCKGi5vcx3LsqnffCZK6n1lL5hjzMreot2gk/v+c=";
   };
   sourceRoot = "${finalAttrs.src.name}/projects/rocm-core";
 
@@ -37,13 +42,14 @@ stdenv.mkDerivation (finalAttrs: {
 
   nativeBuildInputs = [ cmake ];
   env = {
-    ROCM_LIBPATCH_VERSION = "${lib.versions.major finalAttrs.version}${padIfSingle (lib.versions.minor finalAttrs.version)}${padIfSingle (lib.versions.patch finalAttrs.version)}";
+    ROCM_VERSION="${padVersion finalAttrs.version}";
+    ROCM_LIBPATCH_VERSION = buildVersion (finalAttrs.env.ROCM_VERSION);
     BUILD_ID = "nixpkgs-${finalAttrs.env.ROCM_LIBPATCH_VERSION}";
     ROCM_BUILD_ID = "${finalAttrs.env.BUILD_ID}";
   };
   cmakeFlags = [
     "-DROCM_LIBPATCH_VERSION=${finalAttrs.env.ROCM_LIBPATCH_VERSION}"
-    "-DROCM_VERSION=${finalAttrs.version}"
+    "-DROCM_VERSION=${finalAttrs.env.ROCM_VERSION}"
     "-DBUILD_ID=${finalAttrs.env.BUILD_ID}"
     "-DCMAKE_INSTALL_LIBDIR=lib"
     "-DCMAKE_INSTALL_LIBEXECDIR=libexec"
@@ -52,7 +58,7 @@ stdenv.mkDerivation (finalAttrs: {
   ];
 
   setupHook = writeText "setupHook.sh" ''
-    export ROCM_VERSION="${finalAttrs.version}"
+    export ROCM_VERSION="${finalAttrs.env.ROCM_VERSION}"
     export ROCM_LIBPATCH_VERSION="${finalAttrs.env.ROCM_LIBPATCH_VERSION}"
     export ROCM_BUILD_ID="${finalAttrs.env.ROCM_BUILD_ID}"
   '';

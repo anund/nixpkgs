@@ -51,7 +51,7 @@ let
 
       rocm-core = self.callPackage ./rocm-core { stdenv = origStdenv; };
 
-      #  rocminfo = self.callPackage ./rocminfo { stdenv = origStdenv; };
+      rocminfo = self.callPackage ./rocminfo { stdenv = origStdenv; };
 
       rocprofiler-register = self.callPackage ./rocprofiler-register {
         inherit (llvm) clang;

@@ -83,7 +83,7 @@ let
       # TODO: init ROCmValidationSuite
       rdc = self.callPackage ./rdc { };
 
-      #rocm-docs-core = python3Packages.callPackage ./rocm-docs-core { };
+      rocm-docs-core = python3Packages.callPackage ./rocm-docs-core { };
 
       #aotriton = self.callPackage ./aotriton { stdenv = origStdenv; };
 

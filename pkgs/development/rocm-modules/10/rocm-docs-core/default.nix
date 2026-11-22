@@ -21,7 +21,6 @@
   fastjsonschema,
 }:
 
-# FIXME: Move to rocmPackages_common
 buildPythonPackage (finalAttrs: {
   pname = "rocm-docs-core";
   version = "1.34.0";

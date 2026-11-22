@@ -86,9 +86,9 @@ let
 
       #aotriton = self.callPackage ./aotriton { stdenv = origStdenv; };
 
-      #hipify = self.callPackage ./hipify {
-      #  stdenv = origStdenv;
-      #};
+      hipify = self.callPackage ./hipify {
+        stdenv = origStdenv;
+      };
 
       ## hsakmt was merged into rocm-runtime
       #hsakmt = self.rocm-runtime;

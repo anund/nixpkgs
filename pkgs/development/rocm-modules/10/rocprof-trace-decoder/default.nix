@@ -2,7 +2,8 @@
   lib,
   stdenv,
   fetchFromGitHub,
-  rocmPackages,
+  rocm-comgr,
+  rocm-runtime,
   cmake,
   python3,
   nlohmann_json,
@@ -10,40 +11,35 @@
 }:
 
 stdenv.mkDerivation (finalAttrs: {
-  pname = "rocprof-trace-decoder";
-  version = "0.1.7";
+  name = "rocprof-trace-decoder";
+  version = "10.0";
 
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "rocm-systems";
-    # No tags (yet?)
-    rev = "feeca99950c590e0b8228733405c4a1a10fa4773";
+    tag = "therock-${finalAttrs.version}";
     sparseCheckout = [
       "projects/rocprof-trace-decoder"
       "shared"
     ];
-    hash = "sha256-aJhPiZf5380jj2IeCipgcTEQYogr5R19UnVwKRGnkxo=";
+    hash = "sha256-DycEdzXKcEjEybZ/IwTelbTgyaRPqVvoUDUtqhfdhQA=";
   };
 
   sourceRoot = "${finalAttrs.src.name}/projects/rocprof-trace-decoder";
-
-  patches = [
-    ./use-system-dependencies.patch
-    # https://github.com/ROCm/rocm-systems/pull/3800
-    ./fix-test-dependency.patch
-  ];
 
   strictDeps = true;
 
   nativeBuildInputs = [ cmake ];
 
   buildInputs = [
-    rocmPackages.rocm-comgr
-    rocmPackages.rocm-runtime
+    rocm-comgr
+    rocm-runtime
   ];
 
   cmakeFlags = [
     (lib.cmakeBool "BUILD_TESTS" finalAttrs.finalPackage.doCheck)
+    # requires pyelftools
+    (lib.cmakeBool "BUILD_INTEGRATION_TESTS" false)
   ];
 
   nativeCheckInputs = [

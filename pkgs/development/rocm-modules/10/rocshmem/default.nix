@@ -7,33 +7,56 @@
   rocm-cmake,
   rocm-core,
   rocm-runtime,
+  rocprofiler-register,
+  amdsmi,
   clr,
   mpi,
+  symlinkJoin,
   useMpi ? true,
   useReverseOffload ? useMpi,
   buildExamples ? false,
   gpuTargets ? (clr.localGpuTargets or [ ]),
 }:
 
+
+let
+  rocm-path = symlinkJoin {
+    name = "rocm-merged";
+    paths = [
+      clr
+      rocm-runtime
+    ];
+  };
+in
 stdenv.mkDerivation (finalAttrs: {
   pname = "rocshmem${clr.gpuArchSuffix}";
-  version = "7.2.4";
+  version = "10.0";
 
   src = fetchFromGitHub {
     owner = "ROCm";
-    repo = "rocSHMEM";
-    tag = "rocm-${finalAttrs.version}";
-    hash = "sha256-7TiUABwCVPvosoLdR8zN+QGiX+OD7iD+HKMLnGMmRYA=";
+    repo = "rocm-systems";
+    tag = "therock-${finalAttrs.version}";
+    sparseCheckout = [
+      "projects/rocshmem"
+      "shared"
+    ];
+    hash = "sha256-KkMtpW1OYqTp4p+d/Z27PCVM4T4oAOtAPk3uqTxFRJA=";
   };
+  sourceRoot = "${finalAttrs.src.name}/projects/rocshmem";
+
+  patches = [
+    ./fix-clang-include-path.patch
+  ];
 
   nativeBuildInputs = [
     cmake
     rocm-cmake
-    clr
+    rocm-path
   ];
 
   buildInputs = [
-    rocm-runtime
+    rocprofiler-register
+    amdsmi
   ]
   ++ lib.optionals useMpi [
     mpi
@@ -42,8 +65,8 @@ stdenv.mkDerivation (finalAttrs: {
   cmakeFlags = [
     (lib.cmakeBool "CMAKE_POSITION_INDEPENDENT_CODE" true)
     (lib.cmakeFeature "CMAKE_CXX_COMPILER" "hipcc")
-    (lib.cmakeFeature "ROCM_PATH" "${clr}")
     (lib.cmakeFeature "ROCM_VERSION" rocm-core.ROCM_LIBPATCH_VERSION)
+    (lib.cmakeFeature "ROCM_PATH" "${rocm-path}")
     (lib.cmakeBool "USE_IPC" true)
     (lib.cmakeBool "USE_RO" useReverseOffload)
     (lib.cmakeBool "USE_SINGLE_NODE" (!useMpi))

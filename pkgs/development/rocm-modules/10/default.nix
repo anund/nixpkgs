@@ -114,7 +114,7 @@ let
 
       #rocthrust = self.callPackage ./rocthrust { };
 
-      #rocrand = self.callPackage ./rocrand { };
+      rocrand = self.callPackage ./rocrand { };
 
       #hiprand = self.callPackage ./hiprand { };
 

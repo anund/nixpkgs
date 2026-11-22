@@ -6,7 +6,7 @@
   #boost179,
   #opencv,
   python3Packages,
-  #openmpi,
+  openmpi,
   stdenv,
   pkgs,
 }:
@@ -18,7 +18,7 @@ let
       inherit (self) llvm;
       origStdenv = stdenv;
       pyPackages = python3Packages;
-      #openmpi-orig = openmpi;
+      openmpi-orig = openmpi;
       rocmClangStdenv = llvm.rocmClangStdenv;
     in
     ## update script ##
@@ -208,24 +208,24 @@ let
 
       ## Even if config.rocmSupport is false we need rocmSupport true
       ## version of ucc/ucx in openmpi in this package set
-      #openmpi = openmpi-orig.override (
-      #  prev:
-      #  let
-      #    ucx = prev.ucx.override {
-      #      enableCuda = false;
-      #      enableRocm = true;
-      #      rocmPackages = self;
-      #    };
-      #  in
-      #  {
-      #    inherit ucx;
-      #    ucc = prev.ucc.override {
-      #      enableCuda = false;
-      #      inherit ucx;
-      #    };
-      #  }
-      #);
-      #mpi = self.openmpi;
+      openmpi = openmpi-orig.override (
+        prev:
+        let
+          ucx = prev.ucx.override {
+            enableCuda = false;
+            enableRocm = true;
+            rocmPackages = self;
+          };
+        in
+        {
+          inherit ucx;
+          ucc = prev.ucc.override {
+            enableCuda = false;
+            inherit ucx;
+          };
+        }
+      );
+      mpi = self.openmpi;
 
       meta = {
         # eval all pkgsRocm release attrs with

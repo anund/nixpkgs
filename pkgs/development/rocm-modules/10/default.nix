@@ -121,9 +121,7 @@ let
 
       #rocfft = self.callPackage ./rocfft { };
 
-      #mscclpp = self.callPackage ./mscclpp { };
-
-      #rccl = self.callPackage ./rccl { };
+      rccl = self.callPackage ./rccl { };
 
       rocshmem = self.callPackage ./rocshmem { };
 
@@ -253,6 +251,12 @@ let
     }
     ## legacy aliases ##
     // lib.optionalAttrs config.allowAliases {
+
+      mscclpp = throw ''
+        'mscclpp' has been removed as it was unused and last updated in 2024. The only consumer of this package 'rccl' default
+        disabled it's use during the rocm 7 release. The package is still actively developed and could be repackaged outside
+        rocmPackages.
+      ''; # Added 2026-10-22
 
       rocm-bandwidth-test = throw ''
         'rocm-bandwidth-test' has been removed as it is no longer maintained upstream. It is

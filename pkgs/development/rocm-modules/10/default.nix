@@ -136,12 +136,12 @@ let
 
       #hiprt = self.callPackage ./hiprt { };
 
-      #tensile = pyPackages.callPackage ./tensile {
-      #  inherit (self)
-      #    rocmUpdateScript
-      #    clr
-      #    ;
-      #};
+      tensile = pyPackages.callPackage ./tensile {
+        inherit (self)
+          rocmUpdateScript
+          clr
+          ;
+      };
 
       #rocblas = self.callPackage ./rocblas { };
 

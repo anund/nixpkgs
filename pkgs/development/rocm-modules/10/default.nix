@@ -206,6 +206,8 @@ let
       #  useCPU = true;
       #};
 
+      libdivide = self.callPackage ./libdivide { };
+
       ## Even if config.rocmSupport is false we need rocmSupport true
       ## version of ucc/ucx in openmpi in this package set
       openmpi = openmpi-orig.override (

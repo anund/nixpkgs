@@ -158,7 +158,7 @@ let
 
       #hipsolver = self.callPackage ./hipsolver { };
 
-      #hipblas-common = self.callPackage ./hipblas-common { };
+      hipblas-common = self.callPackage ./hipblas-common { };
 
       #hipblas = self.callPackage ./hipblas { };
 

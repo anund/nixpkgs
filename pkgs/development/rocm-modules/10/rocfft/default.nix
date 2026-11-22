@@ -20,17 +20,17 @@
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "rocfft${clr.gpuArchSuffix}";
-  version = "7.2.4";
+  version = "10.0";
 
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "rocm-libraries";
-    tag = "rocm-${finalAttrs.version}";
+    tag = "therock-${finalAttrs.version}";
     sparseCheckout = [
       "projects/rocfft"
       "shared"
     ];
-    hash = "sha256-RjWMzLX0nBA8ClweJ8YgRTn+Nzt/VUkOoSw3jMQ3IWg=";
+    hash = "sha256-k3sD3a9zO6FDKbSY953wDvRI2925n0+fTWJqCPd5zSI=";
   };
   sourceRoot = "${finalAttrs.src.name}/projects/rocfft";
 
@@ -81,6 +81,12 @@ stdenv.mkDerivation (finalAttrs: {
         rocm-cmake
       ];
 
+      # complains it can't find rocfft_c which goes away with theroc-10.1
+      # See: https://github.com/ROCm/rocm-libraries/commit/62657e82b4d51af4f04ec7f0c1e8aeeaf0923e0b#diff-cbd2382f8172870b14798d0e04898eb3c9ccd7f05ac54609f952e90c92bfc8ec
+      cmakeFlags = [
+        (lib.cmakeFeature "SQLITE_USE_SYSTEM_PACKAGE" "ON")
+      ];
+
       buildInputs = [
         boost
         fftw
@@ -88,8 +94,10 @@ stdenv.mkDerivation (finalAttrs: {
         finalAttrs.finalPackage
         gtest
         openmp
+        python3
         rocrand
         hiprand
+        sqlite
       ];
 
       postInstall = ''
@@ -102,7 +110,7 @@ stdenv.mkDerivation (finalAttrs: {
       pname = "${finalAttrs.pname}-benchmark";
       inherit (finalAttrs) version src;
 
-      sourceRoot = "${finalAttrs.src.name}/projects/rocfft/clients/rider";
+      sourceRoot = "${finalAttrs.src.name}/projects/rocfft/clients/bench";
 
       nativeBuildInputs = [
         cmake

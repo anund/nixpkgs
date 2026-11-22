@@ -97,7 +97,8 @@ let
       rocprofiler = self.callPackage ./rocprofiler {
         inherit (llvm) clang;
       };
-      #rocprofiler-sdk = self.callPackage ./rocprofiler-sdk { };
+
+      rocprofiler-sdk = self.callPackage ./rocprofiler-sdk { };
 
       rocprof-compute-viewer = self.callPackage ./rocprof-compute-viewer { };
 

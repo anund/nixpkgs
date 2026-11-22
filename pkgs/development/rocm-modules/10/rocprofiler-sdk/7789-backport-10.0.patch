@@ -1,0 +1,1674 @@
+# Backport of the rocprofiler-sdk OMPT changes from PR 7789
+# https://github.com/ROCm/rocm-systems/pull/7789
+diff --git a/samples/openmp_target/CMakeLists.txt b/samples/openmp_target/CMakeLists.txt
+--- a/samples/openmp_target/CMakeLists.txt
++++ b/samples/openmp_target/CMakeLists.txt
+@@ -86,9 +86,11 @@
+ rocprofiler_samples_get_ld_library_path_env(
+     LIBRARY_PATH_ENV rocprofiler-sdk-roctx::rocprofiler-sdk-roctx-shared-library)
+ 
++# ROCPROFILER_LIBRARY_CTOR initializes rocprofiler-sdk from the preloaded library's
++# constructor, which runs before the OpenMP runtime's own initialization.
+ set(openmp-target-sample-env
+     ${PRELOAD_ENV} ${LIBRARY_PATH_ENV} "OMP_NUM_THREADS=2" "OMP_TARGET_OFFLOAD=mandatory"
+-    "OMP_DISPLAY_ENV=1" "ROCR_VISIBLE_DEVICES=0")
++    "OMP_DISPLAY_ENV=1" "ROCR_VISIBLE_DEVICES=0" "ROCPROFILER_LIBRARY_CTOR=1")
+ 
+ add_test(NAME openmp-target-sample COMMAND $<TARGET_FILE:openmp-target-sample>)
+ 
+diff --git a/samples/openmp_target/client.cpp b/samples/openmp_target/client.cpp
+--- a/samples/openmp_target/client.cpp
++++ b/samples/openmp_target/client.cpp
+@@ -33,6 +33,7 @@
+ 
+ #include "client.hpp"
+ 
++#include <rocprofiler-sdk/ompt.h>
+ #include <rocprofiler-sdk/registration.h>
+ #include <rocprofiler-sdk/rocprofiler.h>
+ 
+@@ -41,6 +42,7 @@
+ #include "common/filesystem.hpp"
+ #include "common/name_info.hpp"
+ 
++#include <atomic>
+ #include <cassert>
+ #include <chrono>
+ #include <cstddef>
+@@ -77,6 +79,9 @@
+ auto                          client_kernels   = kernel_symbol_map_t{};
+ auto                          call_stack_mtx   = std::mutex{};
+ 
++// Counts the OMPT records delivered to this tool.
++auto ompt_callback_count = std::atomic<uint64_t>{};
++
+ auto
+ get_call_stack_lock()
+ {
+@@ -152,6 +157,8 @@
+     }
+     else if(record.kind == ROCPROFILER_CALLBACK_TRACING_OMPT)
+     {
++        ompt_callback_count.fetch_add(1, std::memory_order_relaxed);
++
+         // demonstrate the use of the ompt_data_t* fields from OMPT
+         // The client has its own version of those fields as well as an interface to the
+         // ompt API entry points.
+@@ -599,6 +606,29 @@
+ }
+ }  // namespace client
+ 
++extern "C" {
++// rocprofiler-sdk does not export ompt_start_tool; a tool provides its own and forwards.
++// The forward returns null unless rocprofiler-sdk is already initialized.
++ompt_start_tool_result_t*
++ompt_start_tool(unsigned int omp_version, const char* runtime_version) CLIENT_API;
++
++ompt_start_tool_result_t*
++ompt_start_tool(unsigned int omp_version, const char* runtime_version)
++{
++    return rocprofiler_ompt_start_tool(omp_version, runtime_version);
++}
++
++// Read by the sample executable, which preloads this library rather than linking it.
++uint64_t
++openmp_target_sample_ompt_count(void) CLIENT_API;
++
++uint64_t
++openmp_target_sample_ompt_count(void)
++{
++    return client::ompt_callback_count.load(std::memory_order_relaxed);
++}
++}
++
+ extern "C" rocprofiler_tool_configure_result_t*
+ rocprofiler_configure(uint32_t                 version,
+                       const char*              runtime_version,
+diff --git a/samples/openmp_target/main.cpp b/samples/openmp_target/main.cpp
+--- a/samples/openmp_target/main.cpp
++++ b/samples/openmp_target/main.cpp
+@@ -25,8 +25,14 @@
+ #include <rocprofiler-sdk-roctx/roctx.h>
+ 
+ #include <math.h>
++#include <stdint.h>
+ #include <stdio.h>
+ 
++// Defined by the client library, which is preloaded rather than linked; the symbol is
++// null when that library is absent.
++extern "C" uint64_t
++openmp_target_sample_ompt_count(void) __attribute__((weak));
++
+ constexpr float  EPS_FLOAT  = 1.0e-7f;
+ constexpr double EPS_DOUBLE = 1.0e-15;
+ 
+@@ -142,20 +148,29 @@
+             }
+         }
+     }
+-    if(N_errors == 0)
+-    {
+-        printf("Success\n");
+-        return 0;
+-    }
+-    else
++    roctxRangeStop(range_id);
++
++    if(N_errors > 0)
+     {
+         printf("Total %d failures\n", N_errors);
+         printf("Fail\n");
+         return 1;
+     }
+ 
+-    roctxRangeStop(range_id);
++    if(openmp_target_sample_ompt_count == nullptr)
++    {
++        printf("Fail: the client tool was not loaded, so no OMPT records were collected\n");
++        return 1;
++    }
++
++    uint64_t ompt_count = openmp_target_sample_ompt_count();
++    if(ompt_count == 0)
++    {
++        printf("Fail: the client tool collected no OMPT records\n");
++        return 1;
++    }
+ 
+-    // client::stop();
+-    // client::shutdown();
++    printf("Collected %lu OMPT records\n", static_cast<unsigned long>(ompt_count));
++    printf("Success\n");
++    return 0;
+ }
+diff --git a/source/lib/rocprofiler-sdk/ompt/ompt.cpp b/source/lib/rocprofiler-sdk/ompt/ompt.cpp
+--- a/source/lib/rocprofiler-sdk/ompt/ompt.cpp
++++ b/source/lib/rocprofiler-sdk/ompt/ompt.cpp
+@@ -1204,5 +1204,31 @@
+     update_table(f, std::make_index_sequence<ompt::ompt_domain_info::ompt_last>{});
+ }
+ 
++// Returns true if any registered rocprofiler client subscribes to the OMPT
++// callback or buffered tracing domain, i.e. the SDK has a reason to be the OMPT
++// tool. Reads the registered contexts, so it is valid only once client tool_init
++// callbacks have run and those contexts exist.
++//
++// Domain-level, and asked once per process at rocprofiler_ompt_start_tool()
++// before any operation exists. should_enable_callback() above answers the
++// narrower per-operation "which callbacks do I register" question and reads the
++// same context domains() bitsets, so the two cannot disagree.
++bool
++ompt_service_requested()
++{
++    for(const auto& itr : context::get_registered_contexts())
++    {
++        if(!itr) continue;
++
++        if(itr->callback_tracer &&
++           itr->callback_tracer->domains(ROCPROFILER_CALLBACK_TRACING_OMPT))
++            return true;
++
++        if(itr->buffered_tracer && itr->buffered_tracer->domains(ROCPROFILER_BUFFER_TRACING_OMPT))
++            return true;
++    }
++    return false;
++}
++
+ }  // namespace ompt
+ }  // namespace rocprofiler
+diff --git a/source/lib/rocprofiler-sdk/ompt/ompt.hpp b/source/lib/rocprofiler-sdk/ompt/ompt.hpp
+--- a/source/lib/rocprofiler-sdk/ompt/ompt.hpp
++++ b/source/lib/rocprofiler-sdk/ompt/ompt.hpp
+@@ -203,6 +203,12 @@
+ using ompt_update_func = void (*)(const char* cbname, ompt_callback_t* cbf, int cbnum);
+ void update_table(ompt_update_func);
+ 
++// True iff some registered client subscribes to the OMPT tracing domain. Valid
++// only once client tool_init callbacks have run. Drives the keep-vs-defer
++// decision in rocprofiler_ompt_start_tool().
++bool
++ompt_service_requested();
++
+ void
+ update_callback(rocprofiler_ompt_callback_functions_t& cb_functions);
+ 
+diff --git a/source/lib/rocprofiler-sdk/ompt.cpp b/source/lib/rocprofiler-sdk/ompt.cpp
+--- a/source/lib/rocprofiler-sdk/ompt.cpp
++++ b/source/lib/rocprofiler-sdk/ompt.cpp
+@@ -34,7 +34,6 @@
+ 
+ #include <fmt/format.h>
+ #include <cstdint>
+-#include <iostream>
+ 
+ namespace rocprofiler
+ {
+@@ -236,18 +235,41 @@
+ ompt_start_tool_result_t*
+ rocprofiler_ompt_start_tool(unsigned int omp_version, const char* /*runtime_version*/)
+ {
+-    // log to clog since logging probably won't be initialized here
++    // The OpenMP runtime discovers tools while holding its initialization lock. Initializing
++    // rocprofiler-sdk here loads client tool libraries, and their constructors can call back into
++    // the OpenMP runtime and re-enter that lock on the same thread. A status of 0 is "not
++    // started" and -1 is "in progress"; only a completed initialization proceeds.
++    if(::rocprofiler::registration::get_init_status() <= 0)
++    {
++        ROCP_WARNING << "rocprofiler-sdk OMPT support is not enabled because the OpenMP runtime "
++                        "initialized before rocprofiler-sdk. Initialize rocprofiler-sdk before "
++                        "the first OpenMP call to enable OMPT.";
++        return nullptr;
++    }
++
+     auto _init_status = ::rocprofiler::ompt::init_status.load();
+     if(_init_status != 0)
+     {
+-        std::clog << "ERROR: rocprofiler-sdk OMPT backend has already been initialized: "
+-                  << _init_status << '\n';
++        ROCP_ERROR << "rocprofiler-sdk OMPT backend has already been initialized: " << _init_status;
++        return nullptr;
++    }
++
++    // The guard above already implies client tool_init callbacks have run, so this is idempotent
++    // and does no work. Relaxing that guard makes it load client tool libraries on this thread,
++    // which is the re-entry the guard exists to prevent.
++    ::rocprofiler::registration::initialize();
++
++    // Take the OMPT tool role only when a registered client subscribes to OMPT. Every route
++    // into the SDK's OMPT support reaches here, including a user's own OMPT tool calling this
++    // directly to hand the role over.
++    if(!::rocprofiler::ompt::ompt_service_requested())
++    {
++        ROCP_INFO << "no rocprofiler client subscribes to OMPT; declining the OMPT tool role";
+         return nullptr;
+     }
+ 
+     ::rocprofiler::ompt::omp_version_value.store(static_cast<uint64_t>(omp_version));
+ 
+-    // don't check contexts here, client tool may not be initialized
+     auto* _result = ::rocprofiler::ompt::get_start_tool_result();
+ 
+     if(_result)
+@@ -258,15 +280,4 @@
+ 
+     return _result;
+ }
+-
+-ompt_start_tool_result_t*
+-ompt_start_tool(unsigned int omp_version, const char* runtime_version) ROCPROFILER_PUBLIC_API;
+-
+-ompt_start_tool_result_t*
+-ompt_start_tool(unsigned int omp_version, const char* runtime_version)
+-{
+-    ::rocprofiler::registration::init_logging();
+-    ::rocprofiler::registration::initialize();
+-    return rocprofiler_ompt_start_tool(omp_version, runtime_version);
+-}
+ }
+diff --git a/source/lib/rocprofiler-sdk-tool/tool.cpp b/source/lib/rocprofiler-sdk-tool/tool.cpp
+--- a/source/lib/rocprofiler-sdk-tool/tool.cpp
++++ b/source/lib/rocprofiler-sdk-tool/tool.cpp
+@@ -77,6 +77,7 @@
+ #include <rocprofiler-sdk/intercept_table.h>
+ #include <rocprofiler-sdk/internal_threading.h>
+ #include <rocprofiler-sdk/marker/api_id.h>
++#include <rocprofiler-sdk/ompt.h>
+ #include <rocprofiler-sdk/ompt/api_id.h>
+ #include <rocprofiler-sdk/rocprofiler.h>
+ #include <rocprofiler-sdk/version.h>
+@@ -4468,4 +4469,71 @@
+     ROCP_INFO << "rocprofv3 finished. exit code: " << ret;
+     return ret;
+ }
++
++ompt_start_tool_result_t*
++ompt_start_tool(unsigned int omp_version, const char* runtime_version) ROCPROFILER_PUBLIC_API;
++
++namespace
++{
++// The OpenMP runtime binds the first ompt_start_tool it finds and does not consider any other
++// library already loaded, so declining the role means invoking the next implementation here.
++// Returning null only sends the runtime on to its own OMP_TOOL_LIBRARIES search.
++ompt_start_tool_result_t*
++start_next_ompt_tool(unsigned int omp_version, const char* runtime_version)
++{
++    using ompt_start_tool_t = ompt_start_tool_result_t* (*) (unsigned int, const char*);
++
++    auto* _next = reinterpret_cast<ompt_start_tool_t>(::dlsym(RTLD_NEXT, "ompt_start_tool"));
++    if(_next == nullptr || _next == reinterpret_cast<ompt_start_tool_t>(&ompt_start_tool))
++        return nullptr;
++
++    ROCP_INFO << "rocprofv3 is handing the OMPT tool role to the next ompt_start_tool";
++    return _next(omp_version, runtime_version);
++}
++}  // namespace
++
++ompt_start_tool_result_t*
++ompt_start_tool(unsigned int omp_version, const char* runtime_version)
++{
++    initialize_logging();
++
++    ROCP_INFO << fmt::format(
++        "ompt_start_tool(omp_version={}, runtime_version=\"{}\") was invoked in rocprofv3 tool",
++        omp_version,
++        runtime_version);
++
++    // Take the OMPT tool role only when this invocation collects OMPT, so that a user's own OMPT
++    // tool can have it while rocprofv3 continues tracing everything else. Exactly one OMPT tool
++    // wins, and which one follows from the command line rather than from a separate control.
++    if(!tool::get_config().ompt_trace)
++    {
++        ROCP_INFO << "rocprofv3 is not collecting OMPT; deferring the OMPT tool role";
++        return start_next_ompt_tool(omp_version, runtime_version);
++    }
++
++    // The OpenMP runtime discovers tools while holding its initialization lock. Configuring
++    // rocprofiler-sdk here loads client tool libraries, and their constructors can call back into
++    // the OpenMP runtime and re-enter that lock on the same thread. A status of 0 is "not
++    // started" and -1 is "in progress"; both defer instead of configuring.
++    if(int _status = 0;
++       rocprofiler_is_initialized(&_status) != ROCPROFILER_STATUS_SUCCESS || _status <= 0)
++    {
++        ROCP_WARNING << "rocprofv3 is not collecting OMPT because the OpenMP runtime initialized "
++                        "before rocprofiler-sdk, and is handing the OMPT tool role to the next "
++                        "tool. Initialize rocprofiler-sdk before the first OpenMP call to collect "
++                        "OMPT with rocprofv3.";
++        return start_next_ompt_tool(omp_version, runtime_version);
++    }
++
++    initialize_rocprofv3();
++
++    // rocprofiler-sdk returns null when no registered client subscribes to OMPT. Chain that
++    // decline like the two above rather than passing the null on to the runtime.
++    if(auto* _result = rocprofiler_ompt_start_tool(omp_version, runtime_version);
++       _result != nullptr)
++        return _result;
++
++    ROCP_INFO << "rocprofiler-sdk declined the OMPT tool role; deferring it";
++    return start_next_ompt_tool(omp_version, runtime_version);
++}
+ }
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -85,6 +85,7 @@
+ add_subdirectory(hip-graph-tracing)
+ add_subdirectory(counter-collection)
+ add_subdirectory(openmp-tools)
++add_subdirectory(openmp-init-deadlock)
+ add_subdirectory(rocdecode)
+ add_subdirectory(rocjpeg)
+ add_subdirectory(hipfile)
+diff --git a/tests/bin/openmp/CMakeLists.txt b/tests/bin/openmp/CMakeLists.txt
+--- a/tests/bin/openmp/CMakeLists.txt
++++ b/tests/bin/openmp/CMakeLists.txt
+@@ -42,3 +42,5 @@
+ 
+ add_subdirectory(target)
+ add_subdirectory(host)
++add_subdirectory(init-deadlock)
++add_subdirectory(coexist)
+diff --git a/tests/bin/openmp/coexist/CMakeLists.txt b/tests/bin/openmp/coexist/CMakeLists.txt
+--- /dev/null
++++ b/tests/bin/openmp/coexist/CMakeLists.txt
+@@ -0,0 +1,42 @@
++# MIT License
++#
++# Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
++#
++# Permission is hereby granted, free of charge, to any person obtaining a copy
++# of this software and associated documentation files (the "Software"), to deal
++# in the Software without restriction, including without limitation the rights
++# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++# copies of the Software, and to permit persons to whom the Software is
++# furnished to do so, subject to the following conditions:
++#
++# The above copyright notice and this permission notice shall be included in all
++# copies or substantial portions of the Software.
++#
++# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++# SOFTWARE.
++
++#
++# A mock "second" OMPT tool, standing in for TAU or Score-P, for the OMPT keep-or-defer
++# coexistence tests. It contains no OpenMP code, so it builds with the default compiler
++# rather than OMP_TARGET_COMPILER. The tests that drive it are registered in
++# tests/rocprofv3/ompt-coexist.
++#
++add_library(openmp-coexist-mock SHARED coexist_ompt_tool.cpp)
++# The mock stands in for a third-party tool, so it compiles against the public headers
++# alone and resolves rocprofiler_ompt_start_tool with dlsym at run time. Taking the
++# include directories rather than linking rocprofiler-sdk-headers keeps the SDK's internal
++# build definitions off it, so it compiles the same way in-tree as it does against an
++# installed SDK.
++target_include_directories(
++    openmp-coexist-mock SYSTEM
++    PRIVATE
++        $<TARGET_PROPERTY:rocprofiler-sdk::rocprofiler-sdk,INTERFACE_INCLUDE_DIRECTORIES>)
++# links dl for dlsym(3); CMAKE_DL_LIBS is empty where libdl is folded into libc
++target_link_libraries(openmp-coexist-mock PRIVATE rocprofiler-sdk::tests-build-flags
++                                                  ${CMAKE_DL_LIBS})
++set_target_properties(openmp-coexist-mock PROPERTIES CXX_VISIBILITY_PRESET hidden)
+diff --git a/tests/bin/openmp/coexist/coexist_ompt_tool.cpp b/tests/bin/openmp/coexist/coexist_ompt_tool.cpp
+--- /dev/null
++++ b/tests/bin/openmp/coexist/coexist_ompt_tool.cpp
+@@ -0,0 +1,171 @@
++// MIT License
++//
++// Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
++//
++// Permission is hereby granted, free of charge, to any person obtaining a copy
++// of this software and associated documentation files (the "Software"), to deal
++// in the Software without restriction, including without limitation the rights
++// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++// copies of the Software, and to permit persons to whom the Software is
++// furnished to do so, subject to the following conditions:
++//
++// The above copyright notice and this permission notice shall be included in all
++// copies or substantial portions of the Software.
++//
++// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++// SOFTWARE.
++
++// A mock "second" OMPT tool, standing in for TAU or Score-P, for the OMPT keep-or-defer
++// coexistence tests (tests/rocprofv3/ompt-coexist). It contains no OpenMP code of its own.
++// Its behavior is selected by COEXIST_MOCK_MODE:
++//
++//   own   - act as the OMPT tool itself: register a few callbacks, count the events it
++//           receives, and write a JSON summary to $COEXIST_MOCK_OUTPUT at teardown. Used
++//           (offered via OMP_TOOL_LIBRARIES) to prove the runtime makes a second tool the
++//           OMPT tool when rocprofv3 declines the role.
++//   defer - forward to rocprofiler-sdk by calling rocprofiler_ompt_start_tool() and
++//           returning its result, i.e. hand the OMPT tool role BACK to the SDK.
++//           Used (preloaded first, so the runtime binds us) to prove
++//           the defer-back path arms the SDK's OMPT.
++//
++// In defer mode the summary also carries whether the SDK accepted the hand-back.
++// Those fields latch: ompt_start_tool may be entered more than once.
++
++#ifndef _GNU_SOURCE
++#    define _GNU_SOURCE 1  // for RTLD_DEFAULT
++#endif
++
++#include <rocprofiler-sdk/ompt/omp-tools.h>
++
++#include <dlfcn.h>
++#include <atomic>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++
++namespace
++{
++ompt_set_callback_t set_callback = nullptr;
++
++std::atomic<bool>     initialized{false};
++std::atomic<bool>     finalized{false};
++std::atomic<bool>     forwarded{false};
++std::atomic<bool>     forward_accepted{false};
++std::atomic<uint64_t> n_thread_begin{0};
++std::atomic<uint64_t> n_device_initialize{0};
++std::atomic<uint64_t> n_target_submit_emi{0};
++
++const char*
++b(bool v)
++{
++    return v ? "true" : "false";
++}
++
++void
++write_summary()
++{
++    const char* path = ::getenv("COEXIST_MOCK_OUTPUT");
++    FILE*       os   = path ? ::fopen(path, "w") : stderr;
++    if(os == nullptr) os = stderr;
++
++    fprintf(os,
++            "{\n"
++            "  \"coexist-mock-tool\": {\n"
++            "    \"initialized\": %s,\n"
++            "    \"finalized\": %s,\n"
++            "    \"forwarded\": %s,\n"
++            "    \"forward_accepted\": %s,\n"
++            "    \"events\": {\n"
++            "      \"thread_begin\": %llu,\n"
++            "      \"device_initialize\": %llu,\n"
++            "      \"target_submit_emi\": %llu\n"
++            "    }\n"
++            "  }\n"
++            "}\n",
++            b(initialized),
++            b(finalized),
++            b(forwarded),
++            b(forward_accepted),
++            static_cast<unsigned long long>(n_thread_begin.load()),
++            static_cast<unsigned long long>(n_device_initialize.load()),
++            static_cast<unsigned long long>(n_target_submit_emi.load()));
++    if(os != stderr) ::fclose(os);
++}
++
++void
++on_thread_begin(ompt_thread_t, ompt_data_t*)
++{
++    ++n_thread_begin;
++}
++
++void
++on_device_initialize(int, const char*, ompt_device_t*, ompt_function_lookup_t, const char*)
++{
++    ++n_device_initialize;
++}
++
++void
++on_target_submit_emi(ompt_scope_endpoint_t, ompt_data_t*, ompt_id_t*, unsigned int)
++{
++    ++n_target_submit_emi;
++}
++
++int
++my_initialize(ompt_function_lookup_t lookup, int /*initial_device_num*/, ompt_data_t* /*tool_data*/)
++{
++    initialized.store(true);
++
++    set_callback = reinterpret_cast<ompt_set_callback_t>(lookup("ompt_set_callback"));
++    if(set_callback != nullptr)
++    {
++        set_callback(ompt_callback_thread_begin,
++                     reinterpret_cast<ompt_callback_t*>(on_thread_begin));
++        set_callback(ompt_callback_device_initialize,
++                     reinterpret_cast<ompt_callback_t*>(on_device_initialize));
++        set_callback(ompt_callback_target_submit_emi,
++                     reinterpret_cast<ompt_callback_t*>(on_target_submit_emi));
++    }
++
++    return 1;
++}
++
++void
++my_finalize(ompt_data_t* /*tool_data*/)
++{
++    finalized.store(true);
++    write_summary();
++}
++}  // namespace
++
++extern "C" {
++ompt_start_tool_result_t* ompt_start_tool(unsigned int omp_version,
++                                          const char*  runtime_version)
++    __attribute__((visibility("default")));
++
++ompt_start_tool_result_t*
++ompt_start_tool(unsigned int omp_version, const char* runtime_version)
++{
++    if(const char* mode = ::getenv("COEXIST_MOCK_MODE");
++       mode != nullptr && std::strcmp(mode, "defer") == 0)
++    {
++        using start_tool_t = ompt_start_tool_result_t* (*) (unsigned int, const char*);
++        auto* sdk =
++            reinterpret_cast<start_tool_t>(::dlsym(RTLD_DEFAULT, "rocprofiler_ompt_start_tool"));
++        auto* sdk_result = sdk ? sdk(omp_version, runtime_version) : nullptr;
++
++        forwarded.store(true);
++        if(sdk_result != nullptr) forward_accepted.store(true);
++
++        return sdk_result;
++    }
++
++    static ompt_start_tool_result_t result = {&my_initialize, &my_finalize, {0}};
++    return &result;
++}
++}  // extern "C"
+diff --git a/tests/bin/openmp/init-deadlock/CMakeLists.txt b/tests/bin/openmp/init-deadlock/CMakeLists.txt
+--- /dev/null
++++ b/tests/bin/openmp/init-deadlock/CMakeLists.txt
+@@ -0,0 +1,88 @@
++# MIT License
++#
++# Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
++#
++# Permission is hereby granted, free of charge, to any person obtaining a copy
++# of this software and associated documentation files (the "Software"), to deal
++# in the Software without restriction, including without limitation the rights
++# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++# copies of the Software, and to permit persons to whom the Software is
++# furnished to do so, subject to the following conditions:
++#
++# The above copyright notice and this permission notice shall be included in all
++# copies or substantial portions of the Software.
++#
++# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++# SOFTWARE.
++
++find_package(Threads REQUIRED)
++
++include(rocprofiler-sdk-custom-compilation)
++
++function(openmp_init_deadlock_add_omp_library _NAME _SRC)
++    add_library(${_NAME} SHARED)
++    target_sources(${_NAME} PRIVATE ${_SRC})
++    target_compile_options(${_NAME} PRIVATE -fopenmp)
++    target_link_options(${_NAME} PRIVATE -fopenmp)
++    target_link_libraries(${_NAME} PRIVATE rocprofiler-sdk::tests-build-flags)
++    if(OMP_TARGET_COMPILER)
++        rocprofiler_sdk_custom_compilation(TARGET ${_NAME}
++                                           COMPILER ${OMP_TARGET_COMPILER})
++    endif()
++endfunction()
++
++# the client tools contain no OpenMP code, so they build with the default compiler. Only
++# the libraries that actually use OpenMP need the OpenMP target compiler.
++function(openmp_init_deadlock_add_client_library _NAME _SRC)
++    add_library(${_NAME} SHARED)
++    target_sources(${_NAME} PRIVATE ${_SRC})
++    target_link_libraries(${_NAME} PRIVATE rocprofiler-sdk::tests-build-flags
++                                           rocprofiler-sdk::rocprofiler-sdk)
++endfunction()
++
++# models OpenBLAS (USE_OPENMP=1): DT_INIT calls omp_get_num_places() (see blas_stub.cpp)
++openmp_init_deadlock_add_omp_library(openmp-init-deadlock-blas-stub blas_stub.cpp)
++
++# models an ordinary OpenMP-using application library: its DT_INIT calls into libomp and
++# it exposes lib_get_num_places() so the executable can confirm the constructor ran
++openmp_init_deadlock_add_omp_library(openmp-init-deadlock-consumer openmp_consumer.cpp)
++
++# models a rocprofiler-sdk client tool: only exports rocprofiler_configure. It depends on
++# the consumer (and blas-stub) so their DT_INIT constructors are pending when discovery
++# runs
++openmp_init_deadlock_add_client_library(openmp-init-deadlock-client client.cpp)
++target_link_libraries(
++    openmp-init-deadlock-client
++    PRIVATE # the consumer/blas-stub DT_INIT constructors must be pending when this client
++            # is dlopen'd during discovery, so link them as hard dependencies of the
++            # client
++            "-Wl,--no-as-needed" openmp-init-deadlock-consumer
++            openmp-init-deadlock-blas-stub "-Wl,--as-needed")
++
++openmp_init_deadlock_add_client_library(openmp-init-deadlock-client-alt client.cpp)
++
++add_executable(openmp-init-deadlock)
++target_sources(openmp-init-deadlock PRIVATE openmp-init-deadlock.cpp)
++# main() calls omp_get_num_places() directly, so it needs -fopenmp and an OpenMP runtime
++target_compile_options(openmp-init-deadlock PRIVATE -fopenmp)
++target_link_options(openmp-init-deadlock PRIVATE -fopenmp)
++target_link_libraries(
++    openmp-init-deadlock
++    PRIVATE Threads::Threads
++            rocprofiler-sdk::tests-build-flags
++            # pulls in the client (and transitively consumer + blas-stub) as load-time
++            # deps
++            "-Wl,--no-as-needed"
++            openmp-init-deadlock-client
++            openmp-init-deadlock-client-alt
++            openmp-init-deadlock-consumer
++            "-Wl,--as-needed")
++if(OMP_TARGET_COMPILER)
++    rocprofiler_sdk_custom_compilation(TARGET openmp-init-deadlock
++                                       COMPILER ${OMP_TARGET_COMPILER})
++endif()
+diff --git a/tests/bin/openmp/init-deadlock/blas_stub.cpp b/tests/bin/openmp/init-deadlock/blas_stub.cpp
+--- /dev/null
++++ b/tests/bin/openmp/init-deadlock/blas_stub.cpp
+@@ -0,0 +1,49 @@
++// MIT License
++//
++// Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
++//
++// Permission is hereby granted, free of charge, to any person obtaining a copy
++// of this software and associated documentation files (the "Software"), to deal
++// in the Software without restriction, including without limitation the rights
++// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++// copies of the Software, and to permit persons to whom the Software is
++// furnished to do so, subject to the following conditions:
++//
++// The above copyright notice and this permission notice shall be included in all
++// copies or substantial portions of the Software.
++//
++// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++// SOFTWARE.
++
++// Models an OpenBLAS-style library built with OpenMP support (USE_OPENMP=1). The deadlock
++// originates in OpenBLAS's DT_INIT constructor, which queries the CPU/thread count through
++// OpenMP:
++//
++//     gotoblas_init -> blas_get_cpu_number -> get_num_procs -> omp_get_num_places
++//
++// The call into libomp (omp_get_num_places) forces libomp's first-touch initialization, which
++// acquires libomp's non-recursive init lock and performs OMPT tool discovery while this
++// constructor is still on the stack. This stub reproduces that exact libomp entry point rather
++// than a generic parallel region so the call chain matches the real failure.
++
++#include <omp.h>
++
++#include <cstdio>
++
++namespace
++{
++__attribute__((constructor)) void
++blas_stub_init()
++{
++    fprintf(stderr, "[blas-stub] DT_INIT: omp_get_num_places() (models gotoblas_init CPU query)\n");
++    fflush(stderr);
++    int n = omp_get_num_places();
++    fprintf(stderr, "[blas-stub] omp_get_num_places() returned %d\n", n);
++    fflush(stderr);
++}
++}  // namespace
+diff --git a/tests/bin/openmp/init-deadlock/client.cpp b/tests/bin/openmp/init-deadlock/client.cpp
+--- /dev/null
++++ b/tests/bin/openmp/init-deadlock/client.cpp
+@@ -0,0 +1,102 @@
++// MIT License
++//
++// Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
++//
++// Permission is hereby granted, free of charge, to any person obtaining a copy
++// of this software and associated documentation files (the "Software"), to deal
++// in the Software without restriction, including without limitation the rights
++// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++// copies of the Software, and to permit persons to whom the Software is
++// furnished to do so, subject to the following conditions:
++//
++// The above copyright notice and this permission notice shall be included in all
++// copies or substantial portions of the Software.
++//
++// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++// SOFTWARE.
++
++// Models a rocprofiler-sdk client tool library: it exports rocprofiler_configure, so it is
++// discovered by rocprofiler-sdk's link-map symbol walk during OMPT tool bring-up. The library
++// that actually calls into OpenMP from its DT_INIT constructor is a separate consumer library
++// (see openmp_consumer.cpp); this file only plays the role of the profiler tool.
++
++#include <rocprofiler-sdk/fwd.h>
++#include <rocprofiler-sdk/registration.h>
++#include <rocprofiler-sdk/rocprofiler.h>
++
++#include <cstdio>
++#include <cstdlib>
++
++namespace
++{
++// Detects whether this library's static initialization (DT_INIT_ARRAY) ran *after*
++// rocprofiler_configure/tool_init were invoked. If discovery bypassed DT_INIT_ARRAY to call
++// rocprofiler_configure directly, the later real initialization would clobber this global back
++// to 0 -- so tool_fini seeing anything other than 1 means the tool's static state was corrupted.
++int var_check = 0;
++
++int
++tool_init(rocprofiler_client_finalize_t, void*)
++{
++    var_check = 1;
++    return 0;
++}
++
++void
++tool_fini(void*)
++{
++    if(var_check != 1)
++    {
++        fprintf(stderr,
++                "[client] ERROR: var_check == %d (expected 1); static initialization ran after "
++                "tool_init -- DT_INIT_ARRAY bypass corrupted tool state\n",
++                var_check);
++        fflush(stderr);
++        std::abort();
++    }
++}
++}  // namespace
++
++extern "C" rocprofiler_tool_configure_result_t*
++rocprofiler_configure(uint32_t                 version,
++                      const char*              runtime_version,
++                      uint32_t                 priority,
++                      rocprofiler_client_id_t* id)
++{
++    // set the client name
++    id->name = "OpenMP-Init-Deadlock-Client";
++
++    // compute major/minor/patch version info
++    uint32_t major = version / 10000;
++    uint32_t minor = (version % 10000) / 100;
++    uint32_t patch = version % 100;
++
++    auto _version = rocprofiler_version_triplet_t{};
++    rocprofiler_get_version_triplet(&_version);
++
++    printf("[%s] (priority=%i) is using rocprofiler-sdk v%u.%u.%u | %s | %u.%u.%u (compiled "
++           "against rocprofiler-sdk v%u.%u.%u)\n",
++           id->name,
++           priority,
++           major,
++           minor,
++           patch,
++           runtime_version,
++           _version.major,
++           _version.minor,
++           _version.patch,
++           ROCPROFILER_VERSION_MAJOR,
++           ROCPROFILER_VERSION_MINOR,
++           ROCPROFILER_VERSION_PATCH);
++
++    fflush(stdout);
++
++    static auto cfg = rocprofiler_tool_configure_result_t{
++        sizeof(rocprofiler_tool_configure_result_t), &tool_init, &tool_fini, nullptr};
++    return &cfg;
++}
+diff --git a/tests/bin/openmp/init-deadlock/openmp-init-deadlock.cpp b/tests/bin/openmp/init-deadlock/openmp-init-deadlock.cpp
+--- /dev/null
++++ b/tests/bin/openmp/init-deadlock/openmp-init-deadlock.cpp
+@@ -0,0 +1,83 @@
++// MIT License
++//
++// Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
++//
++// Permission is hereby granted, free of charge, to any person obtaining a copy
++// of this software and associated documentation files (the "Software"), to deal
++// in the Software without restriction, including without limitation the rights
++// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++// copies of the Software, and to permit persons to whom the Software is
++// furnished to do so, subject to the following conditions:
++//
++// The above copyright notice and this permission notice shall be included in all
++// copies or substantial portions of the Software.
++//
++// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++// SOFTWARE.
++
++// Regression test for an OMPT-init deadlock (see tests/openmp-init-deadlock):
++//
++// When rocprofiler-sdk is loaded as an OMPT tool, libomp invokes ompt_start_tool while
++// holding its non-recursive __kmp_initz_lock. rocprofiler-sdk client discovery must not
++// dlopen a library during this window: dlopen re-runs the pending DT_INIT of an
++// already-mapped-but-not-yet-initialized library, and if that DT_INIT calls back into
++// OpenMP it self-deadlocks on the ticket lock.
++//
++// This executable links libopenmp-init-deadlock-blas-stub.so (whose DT_INIT calls into
++// OpenMP, triggering OMPT bring-up) and libopenmp-init-deadlock-client.so (which exports
++// rocprofiler_configure so it is discovered, and whose DT_INIT is still pending when
++// discovery runs). All work happens in the linked libraries' constructors; reaching main
++// means no deadlock occurred.
++
++#include <omp.h>
++
++#include <cstdio>
++#include <cstdlib>
++#include <vector>
++
++extern "C" int
++lib_get_num_places();
++
++namespace
++{
++int64_t
++parallel_reduction(const std::vector<int>& data)
++{
++    // NOLINTBEGIN(modernize-loop-convert)
++    int64_t total = 0;
++#pragma omp parallel for reduction(+ : total)
++    for(std::size_t i = 0; i < data.size(); ++i)
++    {
++        total += data[i];
++    }
++    // NOLINTEND(modernize-loop-convert)
++    return total;
++}
++}  // namespace
++
++int
++main()
++{
++    printf("reached main: no OMPT-init deadlock\n");
++
++    int _omp_num_places = omp_get_num_places();
++    int _lib_num_places = lib_get_num_places();
++    printf("Number of places via OpenMP call:  %d\n", _omp_num_places);
++    printf("Number of places via library call: %d\n", _lib_num_places);
++
++    constexpr int N    = 10000;
++    auto          data = std::vector<int>(N, 0);
++    for(int i = 0; i < N; ++i)
++        data[i] = i + 1;
++
++    auto sum = parallel_reduction(data);
++
++    printf("Sum of 1..%d = %ld\n", N, sum);
++
++    return (_omp_num_places == _lib_num_places) ? EXIT_SUCCESS : EXIT_FAILURE;
++}
+diff --git a/tests/bin/openmp/init-deadlock/openmp_consumer.cpp b/tests/bin/openmp/init-deadlock/openmp_consumer.cpp
+--- /dev/null
++++ b/tests/bin/openmp/init-deadlock/openmp_consumer.cpp
+@@ -0,0 +1,55 @@
++// MIT License
++//
++// Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
++//
++// Permission is hereby granted, free of charge, to any person obtaining a copy
++// of this software and associated documentation files (the "Software"), to deal
++// in the Software without restriction, including without limitation the rights
++// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++// copies of the Software, and to permit persons to whom the Software is
++// furnished to do so, subject to the following conditions:
++//
++// The above copyright notice and this permission notice shall be included in all
++// copies or substantial portions of the Software.
++//
++// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++// SOFTWARE.
++
++// Models an ordinary OpenMP-using application library (distinct from the rocprofiler-sdk tool
++// library that exports rocprofiler_configure). Its DT_INIT constructor calls into libomp, which
++// is the entry point that must be able to run without deadlocking when rocprofiler-sdk is
++// discovering client tools during OMPT bring-up. The captured value is exposed via
++// lib_get_num_places() so the executable can confirm the constructor actually ran.
++
++#include <omp.h>
++
++#include <cstdio>
++
++namespace
++{
++int g_lib_num_places = 0;
++
++__attribute__((constructor)) void
++openmp_consumer_init()
++{
++    fprintf(stderr, "[consumer] DT_INIT (still pending during discovery): omp_get_num_places()\n");
++    fflush(stderr);
++    g_lib_num_places = omp_get_num_places();
++    fprintf(stderr, "[consumer] omp_get_num_places() returned %d\n", g_lib_num_places);
++    fflush(stderr);
++}
++}  // namespace
++
++extern "C" int
++lib_get_num_places() __attribute__((visibility("default")));
++
++extern "C" int
++lib_get_num_places()
++{
++    return g_lib_num_places;
++}
+diff --git a/tests/openmp-init-deadlock/CMakeLists.txt b/tests/openmp-init-deadlock/CMakeLists.txt
+--- /dev/null
++++ b/tests/openmp-init-deadlock/CMakeLists.txt
+@@ -0,0 +1,63 @@
++# MIT License
++#
++# Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
++#
++# Permission is hereby granted, free of charge, to any person obtaining a copy
++# of this software and associated documentation files (the "Software"), to deal
++# in the Software without restriction, including without limitation the rights
++# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++# copies of the Software, and to permit persons to whom the Software is
++# furnished to do so, subject to the following conditions:
++#
++# The above copyright notice and this permission notice shall be included in all
++# copies or substantial portions of the Software.
++#
++# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++# SOFTWARE.
++
++cmake_minimum_required(VERSION 3.21.0 FATAL_ERROR)
++
++project(
++    rocprofiler-sdk-tests-openmp-init-deadlock
++    LANGUAGES CXX
++    VERSION 0.0.0)
++
++find_package(rocprofiler-sdk REQUIRED)
++
++set(IS_DISABLED OFF)
++if(NOT TARGET openmp-init-deadlock)
++    set(IS_DISABLED ON)
++endif()
++if(NOT OMP_TARGET_COMPILER)
++    set(IS_DISABLED ON)
++endif()
++
++# Regression test verifying that rocprofiler-sdk does not act as an OMPT tool on its own.
++#
++# The workload links librocprofiler-sdk (via the client library) but the rocprofv3 tool
++# library is not loaded. libomp discovers an OMPT tool by searching loaded libraries for
++# an ompt_start_tool symbol; because rocprofiler-sdk no longer exports that symbol, libomp
++# finds no tool, performs no client discovery, and the linked libraries' DT_INIT
++# constructors (which call into libomp) run to completion. This models the case of a plain
++# application that merely has rocprofiler-sdk in its address space (for example, importing
++# a library that pulls in OpenMP) with no profiler active: it must not deadlock.
++#
++# The assertion is twofold: the TIMEOUT guards against the deadlock (a hang fails the
++# test), and PASS_REGULAR_EXPRESSION ensures the application actually reached main (so an
++# unrelated early exit cannot pass silently).
++rocprofiler_add_integration_execute_test(
++    openmp-init-deadlock
++    TARGET openmp-init-deadlock
++    TIMEOUT 60
++    LABELS "integration-tests;openmp-init-deadlock"
++    DISABLED "${IS_DISABLED}"
++    ENVIRONMENT
++        "OMP_TOOL=enabled"
++        "OMP_NUM_THREADS=2"
++        "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:rocprofiler-sdk::rocprofiler-sdk-shared-library>:$ENV{LD_LIBRARY_PATH}"
++    PASS_REGULAR_EXPRESSION "reached main: no OMPT-init deadlock")
+diff --git a/tests/openmp-tools/CMakeLists.txt b/tests/openmp-tools/CMakeLists.txt
+--- a/tests/openmp-tools/CMakeLists.txt
++++ b/tests/openmp-tools/CMakeLists.txt
+@@ -35,6 +35,7 @@
+     "OMP_DISPLAY_ENV=1"
+     "OMP_TARGET_OFFLOAD=mandatory"
+     "ROCR_VISIBLE_DEVICES=0"
++    "ROCPROFILER_LIBRARY_CTOR=1"
+     "ROCPROFILER_TOOL_OUTPUT_FILE=openmp-tools-test.json"
+     "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:rocprofiler-sdk::rocprofiler-sdk-shared-library>:$ENV{LD_LIBRARY_PATH}"
+     )
+diff --git a/tests/rocprofv3/CMakeLists.txt b/tests/rocprofv3/CMakeLists.txt
+--- a/tests/rocprofv3/CMakeLists.txt
++++ b/tests/rocprofv3/CMakeLists.txt
+@@ -38,6 +38,7 @@
+ add_subdirectory(pc-sampling)
+ add_subdirectory(collection-period)
+ add_subdirectory(ompt)
++add_subdirectory(ompt-coexist)
+ add_subdirectory(rocdecode-trace)
+ add_subdirectory(rocjpeg-trace)
+ add_subdirectory(hipfile-trace)
+diff --git a/tests/rocprofv3/ompt/CMakeLists.txt b/tests/rocprofv3/ompt/CMakeLists.txt
+--- a/tests/rocprofv3/ompt/CMakeLists.txt
++++ b/tests/rocprofv3/ompt/CMakeLists.txt
+@@ -256,3 +256,36 @@
+     LABELS "integration-tests;openmp-host"
+     FIXTURES_REQUIRED rocprofv3-test-ompt-sys-trace
+     DISABLED "${IS_HOST_DISABLED}")
++
++# Regression test for the OMPT-init deadlock, exercised through rocprofv3. rocprofv3 loads
++# the tool library (which provides the ompt_start_tool symbol), so libomp engages OMPT and
++# rocprofiler-sdk performs client discovery. The openmp-init-deadlock workload links a
++# library whose DT_INIT constructor calls into libomp, reproducing the conditions under
++# which discovery previously self-deadlocked. Reaching main means discovery completed
++# without re-entering libomp's init lock.
++#
++# The assertion is twofold: TIMEOUT guards against the deadlock (a hang fails the test),
++# and PASS_REGULAR_EXPRESSION ensures the workload actually reached main (so an unrelated
++# early exit cannot pass silently). This is a host-only OpenMP workload, so it is gated on
++# OMP_TARGET_COMPILER and the workload target rather than on target-offload support.
++set(IS_INIT_DEADLOCK_DISABLED OFF)
++if(NOT TARGET openmp-init-deadlock
++   OR NOT OMP_TARGET_COMPILER
++   OR (ROCPROFILER_MEMCHECK AND ROCPROFILER_MEMCHECK IN_LIST ROCPROFILER_MEMCHECK_TYPES))
++    set(IS_INIT_DEADLOCK_DISABLED ON)
++endif()
++
++set(ompt-init-deadlock-output-dir ${CMAKE_CURRENT_BINARY_DIR}/openmp-init-deadlock-trace)
++rocprofiler_add_integration_execute_test(
++    rocprofv3-test-ompt-init-deadlock
++    COMMAND
++        $<TARGET_FILE:rocprofiler-sdk::rocprofv3> --sys-trace -d
++        ${ompt-init-deadlock-output-dir} -o out --output-format rocpd --log-level env --
++        $<IF:$<TARGET_EXISTS:openmp-init-deadlock>,$<TARGET_FILE:openmp-init-deadlock>,openmp-init-deadlock>
++    DEPENDS openmp-init-deadlock
++    TIMEOUT 20
++    LABELS "integration-tests;openmp-host"
++    ENVIRONMENT "${ompt-host-env}"
++    PRELOAD "${PRELOAD_ENV}"
++    PASS_REGULAR_EXPRESSION "reached main: no OMPT-init deadlock"
++    DISABLED "${IS_INIT_DEADLOCK_DISABLED}")
+diff --git a/tests/rocprofv3/ompt-coexist/CMakeLists.txt b/tests/rocprofv3/ompt-coexist/CMakeLists.txt
+--- /dev/null
++++ b/tests/rocprofv3/ompt-coexist/CMakeLists.txt
+@@ -0,0 +1,259 @@
++# MIT License
++#
++# Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
++#
++# Permission is hereby granted, free of charge, to any person obtaining a copy
++# of this software and associated documentation files (the "Software"), to deal
++# in the Software without restriction, including without limitation the rights
++# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++# copies of the Software, and to permit persons to whom the Software is
++# furnished to do so, subject to the following conditions:
++#
++# The above copyright notice and this permission notice shall be included in all
++# copies or substantial portions of the Software.
++#
++# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++# SOFTWARE.
++
++#
++# Integration tests: rocprofv3 coexisting with a second OMPT tool.
++#
++# The OpenMP runtime hosts exactly one OMPT tool. rocprofv3 takes the role when it was
++# asked to collect OMPT and declines it otherwise, so a user profiling with rocprofv3 can
++# still run their own OMPT tool (TAU, Score-P) by leaving --ompt-trace off. Every case
++# here runs the same workload against the same stand-in tool, built in
++# tests/bin/openmp/coexist, and differs only in how that tool reaches the
++# runtime and what the rocprofv3 command line asks for:
++#
++# In the keep and defer cases the tool is offered through OMP_TOOL_LIBRARIES, which the
++# runtime consults only once no loaded library has claimed the role. rocprofv3 is asked
++# for OMPT, or is not, and the role follows.
++#
++# In the defer-back cases the tool is loaded ahead of rocprofv3 and claims the role, then
++# hands it back through the public rocprofiler_ompt_start_tool. That bypasses rocprofv3's
++# own entry point, so the decision falls to the SDK, which accepts the role only when a
++# client subscribes to OMPT.
++#
++cmake_minimum_required(VERSION 3.24 FATAL_ERROR)
++
++project(
++    rocprofiler-sdk-tests-rocprofv3-ompt-coexist
++    LANGUAGES CXX
++    VERSION 0.0.0)
++
++find_package(rocprofiler-sdk REQUIRED)
++
++rocprofiler_configure_pytest_files(CONFIG pytest.ini COPY validate.py conftest.py)
++
++set(ROCPROFILER_MEMCHECK_TYPES "ThreadSanitizer" "AddressSanitizer"
++                               "UndefinedBehaviorSanitizer")
++
++if(ROCPROFILER_MEMCHECK AND ROCPROFILER_MEMCHECK IN_LIST ROCPROFILER_MEMCHECK_TYPES)
++    set(IS_DISABLED ON)
++else()
++    set(IS_DISABLED OFF)
++endif()
++
++# disable when GPU-0 is navi2, navi3, or navi4 (no OpenMP target offload support)
++list(GET rocprofiler-sdk-tests-gfx-info 0 ompt-coexist-gpu-0-gfx-info)
++if("${ompt-coexist-gpu-0-gfx-info}" MATCHES "^gfx(10|11|12)[0-9][0-9]$")
++    set(IS_DISABLED ON)
++endif()
++
++# the workload and the stand-in tool are both required
++if(NOT TARGET openmp-target OR NOT TARGET openmp-coexist-mock)
++    set(IS_DISABLED ON)
++endif()
++
++string(REPLACE "LD_PRELOAD=" "ROCPROF_PRELOAD=" PRELOAD_ENV
++               "${ROCPROFILER_MEMCHECK_PRELOAD_ENV}")
++
++set(ompt-coexist-base-env
++    "OMP_NUM_THREADS=2"
++    "OMP_TARGET_OFFLOAD=mandatory"
++    "OMP_DISPLAY_ENV=1"
++    "ROCR_VISIBLE_DEVICES=0"
++    "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:rocprofiler-sdk::rocprofiler-sdk-shared-library>:$ENV{LD_LIBRARY_PATH}"
++    )
++
++# OMP_TOOL_LIBRARIES is the runtime's own tool search, consulted only once no already
++# loaded library claims the role. Offering the stand-in tool through it is what makes the
++# keep and defer cases differ in outcome rather than in setup.
++set(ompt-coexist-env ${ompt-coexist-base-env}
++                     "OMP_TOOL_LIBRARIES=$<TARGET_FILE:openmp-coexist-mock>")
++
++# ---- keep: --ompt-trace, so rocprofv3 holds the OMPT tool role -----------------------
++set(ompt-coexist-keep-output-dir ${CMAKE_CURRENT_BINARY_DIR}/ompt-coexist-keep)
++set(ompt-coexist-keep-mock-output ${ompt-coexist-keep-output-dir}/mock-summary.json)
++# the stand-in tool writes its summary from inside the workload, so the directory has to
++# exist before rocprofv3 creates its own output there.
++file(MAKE_DIRECTORY ${ompt-coexist-keep-output-dir})
++set(ompt-coexist-keep-env ${ompt-coexist-env}
++                          "COEXIST_MOCK_OUTPUT=${ompt-coexist-keep-mock-output}")
++set(ompt-coexist-keep-validate-k
++    "test_rocprofv3_kept_ompt_role or test_other_tool_did_not_get_role or test_kernel_dispatch_tracing_intact"
++    )
++
++rocprofiler_add_integration_execute_test(
++    rocprofv3-test-ompt-coexist-keep
++    COMMAND
++        $<TARGET_FILE:rocprofiler-sdk::rocprofv3> --ompt-trace --kernel-trace -d
++        ${ompt-coexist-keep-output-dir} -o out --output-format rocpd --log-level env --
++        $<IF:$<TARGET_EXISTS:openmp-target>,$<TARGET_FILE:openmp-target>,openmp-target>
++    DEPENDS openmp-target
++    TIMEOUT 100
++    LABELS "integration-tests;openmp-target;ompt-coexist"
++    ENVIRONMENT "${ompt-coexist-keep-env}"
++    PRELOAD "${PRELOAD_ENV}"
++    FIXTURES_SETUP rocprofv3-test-ompt-coexist-keep
++    DISABLED "${IS_DISABLED}")
++
++rocprofiler_add_integration_validate_test(
++    rocprofv3-test-ompt-coexist-keep
++    TEST_PATHS validate.py
++    COPY conftest.py
++    CONFIG pytest.ini
++    ARGS -k "${ompt-coexist-keep-validate-k}" --rocpd-input
++         ${ompt-coexist-keep-output-dir}/out_results.db --mock-input
++         ${ompt-coexist-keep-mock-output}
++    DISCOVERY_ARGS -k "${ompt-coexist-keep-validate-k}"
++    TIMEOUT 45
++    LABELS "integration-tests;openmp-target;ompt-coexist"
++    FIXTURES_REQUIRED rocprofv3-test-ompt-coexist-keep
++    DISABLED "${IS_DISABLED}")
++
++# ---- defer: no OMPT requested, so the stand-in tool gets the role --------------------
++set(ompt-coexist-defer-output-dir ${CMAKE_CURRENT_BINARY_DIR}/ompt-coexist-defer)
++set(ompt-coexist-defer-mock-output ${ompt-coexist-defer-output-dir}/mock-summary.json)
++file(MAKE_DIRECTORY ${ompt-coexist-defer-output-dir})
++set(ompt-coexist-defer-env ${ompt-coexist-env}
++                           "COEXIST_MOCK_OUTPUT=${ompt-coexist-defer-mock-output}")
++set(ompt-coexist-defer-validate-k
++    "test_rocprofv3_deferred_ompt_role or test_other_tool_got_role or test_kernel_dispatch_tracing_intact"
++    )
++
++rocprofiler_add_integration_execute_test(
++    rocprofv3-test-ompt-coexist-defer
++    COMMAND
++        $<TARGET_FILE:rocprofiler-sdk::rocprofv3> --kernel-trace -d
++        ${ompt-coexist-defer-output-dir} -o out --output-format rocpd --log-level env --
++        $<IF:$<TARGET_EXISTS:openmp-target>,$<TARGET_FILE:openmp-target>,openmp-target>
++    DEPENDS openmp-target
++    TIMEOUT 100
++    LABELS "integration-tests;openmp-target;ompt-coexist"
++    ENVIRONMENT "${ompt-coexist-defer-env}"
++    PRELOAD "${PRELOAD_ENV}"
++    FIXTURES_SETUP rocprofv3-test-ompt-coexist-defer
++    DISABLED "${IS_DISABLED}")
++
++rocprofiler_add_integration_validate_test(
++    rocprofv3-test-ompt-coexist-defer
++    TEST_PATHS validate.py
++    COPY conftest.py
++    CONFIG pytest.ini
++    ARGS -k "${ompt-coexist-defer-validate-k}" --rocpd-input
++         ${ompt-coexist-defer-output-dir}/out_results.db --mock-input
++         ${ompt-coexist-defer-mock-output}
++    DISCOVERY_ARGS -k "${ompt-coexist-defer-validate-k}"
++    TIMEOUT 45
++    LABELS "integration-tests;openmp-target;ompt-coexist"
++    FIXTURES_REQUIRED rocprofv3-test-ompt-coexist-defer
++    DISABLED "${IS_DISABLED}")
++
++# ---- defer-back: the other tool is bound first and hands the role back ---------------
++# ROCPROF_PRELOAD is prepended to LD_PRELOAD by rocprofv3, ahead of its own libraries, so
++# the runtime binds the stand-in tool rather than rocprofv3. The tool then calls
++# rocprofiler_ompt_start_tool directly, reaching the SDK without passing through
++# rocprofv3's own entry point. OMP_TOOL_LIBRARIES is deliberately absent here: the tool is
++# already loaded and claims the role, so the runtime never reaches its own search. (These
++# tests are disabled under sanitizers, so this does not contend with the sanitizer
++# ROCPROF_PRELOAD built above.)
++set(ompt-coexist-deferback-env ${ompt-coexist-base-env} "COEXIST_MOCK_MODE=defer"
++                               "ROCPROF_PRELOAD=$<TARGET_FILE:openmp-coexist-mock>")
++
++# asked for OMPT: accepting the hand-back must collect it
++set(ompt-coexist-deferback-output-dir ${CMAKE_CURRENT_BINARY_DIR}/ompt-coexist-deferback)
++set(ompt-coexist-deferback-mock-output
++    ${ompt-coexist-deferback-output-dir}/mock-summary.json)
++file(MAKE_DIRECTORY ${ompt-coexist-deferback-output-dir})
++set(ompt-coexist-deferback-asked-env
++    ${ompt-coexist-deferback-env}
++    "COEXIST_MOCK_OUTPUT=${ompt-coexist-deferback-mock-output}")
++set(ompt-coexist-deferback-validate-k
++    "test_deferback_rocprofv3_collected_ompt or test_deferback_other_tool_forwarded or test_deferback_handback_accepted or test_kernel_dispatch_tracing_intact"
++    )
++
++rocprofiler_add_integration_execute_test(
++    rocprofv3-test-ompt-coexist-deferback
++    COMMAND
++        $<TARGET_FILE:rocprofiler-sdk::rocprofv3> --ompt-trace --kernel-trace -d
++        ${ompt-coexist-deferback-output-dir} -o out --output-format rocpd --log-level env
++        -- $<IF:$<TARGET_EXISTS:openmp-target>,$<TARGET_FILE:openmp-target>,openmp-target>
++    DEPENDS openmp-target
++    TIMEOUT 100
++    LABELS "integration-tests;openmp-target;ompt-coexist"
++    ENVIRONMENT "${ompt-coexist-deferback-asked-env}"
++    PRELOAD "${PRELOAD_ENV}"
++    FIXTURES_SETUP rocprofv3-test-ompt-coexist-deferback
++    DISABLED "${IS_DISABLED}")
++
++rocprofiler_add_integration_validate_test(
++    rocprofv3-test-ompt-coexist-deferback
++    TEST_PATHS validate.py
++    COPY conftest.py
++    CONFIG pytest.ini
++    ARGS -k "${ompt-coexist-deferback-validate-k}" --rocpd-input
++         ${ompt-coexist-deferback-output-dir}/out_results.db --mock-input
++         ${ompt-coexist-deferback-mock-output}
++    DISCOVERY_ARGS -k "${ompt-coexist-deferback-validate-k}"
++    TIMEOUT 45
++    LABELS "integration-tests;openmp-target;ompt-coexist"
++    FIXTURES_REQUIRED rocprofv3-test-ompt-coexist-deferback
++    DISABLED "${IS_DISABLED}")
++
++# not asked for OMPT: the hand-back must be declined rather than silently honored
++set(ompt-coexist-deferback-unasked-output-dir
++    ${CMAKE_CURRENT_BINARY_DIR}/ompt-coexist-deferback-unasked)
++set(ompt-coexist-deferback-unasked-mock-output
++    ${ompt-coexist-deferback-unasked-output-dir}/mock-summary.json)
++file(MAKE_DIRECTORY ${ompt-coexist-deferback-unasked-output-dir})
++set(ompt-coexist-deferback-unasked-env
++    ${ompt-coexist-deferback-env}
++    "COEXIST_MOCK_OUTPUT=${ompt-coexist-deferback-unasked-mock-output}")
++set(ompt-coexist-deferback-unasked-validate-k
++    "test_deferback_without_request_collects_no_ompt or test_deferback_other_tool_forwarded or test_deferback_handback_declined or test_kernel_dispatch_tracing_intact"
++    )
++
++rocprofiler_add_integration_execute_test(
++    rocprofv3-test-ompt-coexist-deferback-unasked
++    COMMAND
++        $<TARGET_FILE:rocprofiler-sdk::rocprofv3> --kernel-trace -d
++        ${ompt-coexist-deferback-unasked-output-dir} -o out --output-format rocpd
++        --log-level env --
++        $<IF:$<TARGET_EXISTS:openmp-target>,$<TARGET_FILE:openmp-target>,openmp-target>
++    DEPENDS openmp-target
++    TIMEOUT 100
++    LABELS "integration-tests;openmp-target;ompt-coexist"
++    ENVIRONMENT "${ompt-coexist-deferback-unasked-env}"
++    PRELOAD "${PRELOAD_ENV}"
++    FIXTURES_SETUP rocprofv3-test-ompt-coexist-deferback-unasked
++    DISABLED "${IS_DISABLED}")
++
++rocprofiler_add_integration_validate_test(
++    rocprofv3-test-ompt-coexist-deferback-unasked
++    TEST_PATHS validate.py
++    COPY conftest.py
++    CONFIG pytest.ini
++    ARGS -k "${ompt-coexist-deferback-unasked-validate-k}" --rocpd-input
++         ${ompt-coexist-deferback-unasked-output-dir}/out_results.db --mock-input
++         ${ompt-coexist-deferback-unasked-mock-output}
++    DISCOVERY_ARGS -k "${ompt-coexist-deferback-unasked-validate-k}"
++    TIMEOUT 45
++    LABELS "integration-tests;openmp-target;ompt-coexist"
++    FIXTURES_REQUIRED rocprofv3-test-ompt-coexist-deferback-unasked
++    DISABLED "${IS_DISABLED}")
+diff --git a/tests/rocprofv3/ompt-coexist/conftest.py b/tests/rocprofv3/ompt-coexist/conftest.py
+--- /dev/null
++++ b/tests/rocprofv3/ompt-coexist/conftest.py
+@@ -0,0 +1,68 @@
++#!/usr/bin/env python3
++
++# MIT License
++#
++# Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
++#
++# Permission is hereby granted, free of charge, to any person obtaining a copy
++# of this software and associated documentation files (the "Software"), to deal
++# in the Software without restriction, including without limitation the rights
++# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++# copies of the Software, and to permit persons to whom the Software is
++# furnished to do so, subject to the following conditions:
++#
++# The above copyright notice and this permission notice shall be included in
++# all copies or substantial portions of the Software.
++#
++# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
++# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++# THE SOFTWARE.
++
++import json
++import os
++import sqlite3
++
++import pytest
++
++
++def pytest_addoption(parser):
++    parser.addoption(
++        "--rocpd-input",
++        action="store",
++        default="out_results.db",
++        help="Input rocpd SQLite database written by rocprofv3",
++    )
++    parser.addoption(
++        "--mock-input",
++        action="store",
++        default="coexist-mock.json",
++        help="JSON summary the mock OMPT tool writes at teardown",
++    )
++
++
++@pytest.fixture
++def rocpd_conn(request):
++    """Open the rocpd SQLite database. OMPT is a rocpd-only trace, so all OMPT
++    validators read from here. Skipped when the database is unavailable (the
++    execute test that produces it was skipped or failed)."""
++    filename = request.config.getoption("--rocpd-input")
++    if not os.path.isfile(filename):
++        return pytest.skip("rocpd output unavailable")
++    return sqlite3.connect(filename)
++
++
++@pytest.fixture
++def mock_summary(request):
++    """Parsed JSON summary from the mock OMPT tool, or None when the file is
++    absent. Absence is itself an assertable outcome: the mock only writes the
++    summary once the OpenMP runtime has loaded it, so no file means the runtime
++    never went looking for a second tool."""
++    filename = request.config.getoption("--mock-input")
++    if not os.path.isfile(filename):
++        return None
++    with open(filename, "r") as inp:
++        return json.load(inp)["coexist-mock-tool"]
+diff --git a/tests/rocprofv3/ompt-coexist/pytest.ini b/tests/rocprofv3/ompt-coexist/pytest.ini
+--- /dev/null
++++ b/tests/rocprofv3/ompt-coexist/pytest.ini
+@@ -0,0 +1,5 @@
++
++[pytest]
++addopts = --durations=20 -rA -s
++testpaths = validate.py
++pythonpath = @ROCPROFILER_SDK_TESTS_BINARY_DIR@/pytest-packages
+diff --git a/tests/rocprofv3/ompt-coexist/validate.py b/tests/rocprofv3/ompt-coexist/validate.py
+--- /dev/null
++++ b/tests/rocprofv3/ompt-coexist/validate.py
+@@ -0,0 +1,179 @@
++#!/usr/bin/env python3
++
++# MIT License
++#
++# Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
++#
++# Permission is hereby granted, free of charge, to any person obtaining a copy
++# of this software and associated documentation files (the "Software"), to deal
++# in the Software without restriction, including without limitation the rights
++# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++# copies of the Software, and to permit persons to whom the Software is
++# furnished to do so, subject to the following conditions:
++#
++# The above copyright notice and this permission notice shall be included in all
++# copies or substantial portions of the Software.
++#
++# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++# SOFTWARE.
++
++# Validators for the OMPT keep-or-defer role decision as a user meets it: through
++# rocprofv3, with a second OMPT tool offered to the OpenMP runtime via
++# OMP_TOOL_LIBRARIES. Exactly one tool holds the role, and which one follows from
++# the rocprofv3 command line:
++#
++#   keep  - `rocprofv3 --ompt-trace ...` collects OMPT, so rocprofv3 holds the role
++#           and the runtime never goes looking for a second tool.
++#   defer - `rocprofv3` without OMPT hands the role to the other tool, and keeps
++#           tracing everything else it was asked for.
++#
++# A tool that does hold the role may also hand it back, by calling the public
++# rocprofiler_ompt_start_tool directly. That path bypasses the rocprofv3 entry point
++# altogether, so rocprofiler_ompt_start_tool decides, accepting the role only when a
++# client subscribes to OMPT. The mock records the result it was handed, which is what
++# the accepted/declined validators read.
++#
++# OMPT is a rocpd-only trace, so rocprofv3's side is read from the rocpd database
++# and the other tool's side from the JSON summary it writes at teardown.
++
++import sys
++
++import pytest
++
++OMPT_CATEGORY = "OMPT"
++
++
++def _ompt_record_count(conn):
++    """Row count for OMPT records in rocpd, spanning both ranged regions and
++    instant samples."""
++    (count,) = conn.execute(
++        "SELECT COUNT(*) FROM regions_and_samples WHERE category = ?",
++        (OMPT_CATEGORY,),
++    ).fetchone()
++    return count
++
++
++def _kernel_dispatch_count(conn):
++    (count,) = conn.execute("SELECT COUNT(*) FROM kernels").fetchone()
++    return count
++
++
++def test_rocprofv3_kept_ompt_role(rocpd_conn):
++    """rocprofv3 was asked to collect OMPT, so it must hold the OMPT tool role and
++    the rocpd database must contain OMPT records."""
++    assert (
++        _ompt_record_count(rocpd_conn) > 0
++    ), "rocprofv3 was run with --ompt-trace but recorded no OMPT records"
++
++
++def test_other_tool_did_not_get_role(mock_summary):
++    """The second tool was offered via OMP_TOOL_LIBRARIES. Because rocprofv3 kept
++    the role, the OpenMP runtime never walked that list, so the tool was never even
++    loaded and wrote no summary."""
++    assert mock_summary is None, (
++        "the second OMPT tool ran even though rocprofv3 kept the OMPT tool role: "
++        f"{mock_summary}"
++    )
++
++
++def test_rocprofv3_deferred_ompt_role(rocpd_conn):
++    """rocprofv3 was not asked to collect OMPT, so it must have declined the role
++    and recorded no OMPT."""
++    count = _ompt_record_count(rocpd_conn)
++    assert (
++        count == 0
++    ), f"rocprofv3 recorded {count} OMPT record(s) without being asked to trace OMPT"
++
++
++def test_other_tool_got_role(mock_summary):
++    """With rocprofv3 declining, the OpenMP runtime must fall through to its own
++    OMP_TOOL_LIBRARIES search and make the second tool the OMPT tool."""
++    assert (
++        mock_summary is not None
++    ), "the second OMPT tool wrote no summary, so the runtime never loaded it"
++    assert mock_summary[
++        "initialized"
++    ], "the second OMPT tool was loaded but never made the OMPT tool"
++    assert (
++        mock_summary["events"]["thread_begin"] > 0
++    ), "the second OMPT tool held the role but received no callbacks"
++
++
++def test_deferback_rocprofv3_collected_ompt(rocpd_conn):
++    """A tool that holds the role may hand it back by calling
++    rocprofiler_ompt_start_tool directly. rocprofv3 was asked to collect OMPT, so its
++    OMPT contexts are registered, the hand-back is accepted, and the records must match
++    holding the role from the start. The hand-back arrives before main(), with
++    rocprofiler-sdk already initialized by its own library constructor."""
++    assert (
++        _ompt_record_count(rocpd_conn) > 0
++    ), "rocprofv3 was handed the OMPT tool role back but recorded no OMPT records"
++
++
++def test_deferback_without_request_collects_no_ompt(rocpd_conn):
++    """The hand-back reaches rocprofiler-sdk directly, bypassing the rocprofv3 entry
++    point that consults the command line. rocprofv3 registered no OMPT contexts, so
++    rocprofiler_ompt_start_tool must decline the role: another tool cannot switch on
++    collection that was never requested."""
++    count = _ompt_record_count(rocpd_conn)
++    assert count == 0, (
++        f"rocprofv3 recorded {count} OMPT record(s) after a hand-back, without being "
++        "asked to trace OMPT"
++    )
++
++
++def test_deferback_other_tool_forwarded(mock_summary):
++    """The other tool was loaded first and bound by the runtime, then handed the role
++    on rather than keeping it, so it ran but never became the OMPT tool itself."""
++    assert (
++        mock_summary is not None
++    ), "the other OMPT tool wrote no summary, so it was never loaded"
++    assert mock_summary[
++        "forwarded"
++    ], "the other OMPT tool never called rocprofiler_ompt_start_tool"
++    assert not mock_summary[
++        "initialized"
++    ], "the other OMPT tool kept the role instead of handing it back"
++
++
++def test_deferback_handback_accepted(mock_summary):
++    """rocprofv3 was asked to collect OMPT, so rocprofiler_ompt_start_tool must accept
++    the hand-back and return a result table to the tool offering it."""
++    assert (
++        mock_summary is not None
++    ), "the other OMPT tool wrote no summary, so it was never loaded"
++    assert mock_summary["forward_accepted"], (
++        "rocprofiler_ompt_start_tool declined the OMPT tool role even though rocprofv3 "
++        "was asked to trace OMPT"
++    )
++
++
++def test_deferback_handback_declined(mock_summary):
++    """rocprofv3 registered no OMPT contexts, so rocprofiler_ompt_start_tool must
++    decline the hand-back and return null: another tool cannot switch on collection
++    that was never requested."""
++    assert (
++        mock_summary is not None
++    ), "the other OMPT tool wrote no summary, so it was never loaded"
++    assert not mock_summary["forward_accepted"], (
++        "rocprofiler_ompt_start_tool took the OMPT tool role from another tool without "
++        "any client subscribing to OMPT"
++    )
++
++
++def test_kernel_dispatch_tracing_intact(rocpd_conn):
++    """The tracing rocprofv3 was asked for on the command line must land in the rocpd
++    database whether or not it also holds the OMPT tool role."""
++    assert (
++        _kernel_dispatch_count(rocpd_conn) > 0
++    ), "rocprofv3 was run with --kernel-trace but recorded no kernel dispatches"
++
++
++if __name__ == "__main__":
++    exit_code = pytest.main(["-x", __file__] + sys.argv[1:])
++    sys.exit(exit_code)
+diff --git a/tests/tools/json-tool.cpp b/tests/tools/json-tool.cpp
+--- a/tests/tools/json-tool.cpp
++++ b/tests/tools/json-tool.cpp
+@@ -47,6 +47,7 @@
+ #include <rocprofiler-sdk/external_correlation.h>
+ #include <rocprofiler-sdk/fwd.h>
+ #include <rocprofiler-sdk/internal_threading.h>
++#include <rocprofiler-sdk/ompt.h>
+ #include <rocprofiler-sdk/registration.h>
+ #include <rocprofiler-sdk/rocprofiler.h>
+ #include <rocprofiler-sdk/cxx/utility.hpp>
+@@ -3646,4 +3647,18 @@
+     return &cfg;
+ }
+ 
++extern "C" {
++ompt_start_tool_result_t*
++ompt_start_tool(unsigned int omp_version, const char* runtime_version) ROCPROFILER_PUBLIC_API;
++
++ompt_start_tool_result_t*
++ompt_start_tool(unsigned int omp_version, const char* runtime_version)
++{
++    std::clog << "[rocprofiler-sdk-json-tool] ompt_start_tool(omp_version=" << omp_version
++              << ", runtime_version=" << runtime_version << ")" << std::endl;
++    // redirect to rocprofiler-sdk's implementation of ompt_start_tool
++    return rocprofiler_ompt_start_tool(omp_version, runtime_version);
++}
++}
++
+ PERFETTO_TRACK_EVENT_STATIC_STORAGE();

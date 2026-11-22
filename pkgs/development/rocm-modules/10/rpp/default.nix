@@ -10,7 +10,10 @@
   clr,
   openmp,
   boost,
+  gfortran,
   python3Packages,
+  symlinkJoin,
+  fetchpatch,
   buildDocs ? false, # Needs internet
   useCPU ? false,
   gpuTargets ? clr.localGpuTargets or [ ],
@@ -19,19 +22,31 @@
 stdenv.mkDerivation (finalAttrs: {
   pname = "rpp-${if useCPU then "cpu" else "hip"}";
 
-  version = "7.2.4";
+  version = "10.0";
 
   src = fetchFromGitHub {
     owner = "ROCm";
-    repo = "rpp";
-    tag = "rocm-${finalAttrs.version}";
-    hash = "sha256-6e4JHKFC2dvtSGo9xbQKzIdUwlHB09pr5C/5xHwP3l4=";
+    repo = "rocm-libraries";
+    tag = "therock-${finalAttrs.version}";
+    sparseCheckout = [
+      "projects/rpp"
+      "shared"
+    ];
+    hash = "sha256-IMZs/Llv2WBTP4CbWMhJTgTdTAG8orzjg5TjRDJNh4s=";
   };
+  sourceRoot = "${finalAttrs.src.name}/projects/rpp";
+
+  patches = lib.optionals useCPU [
+    # can be removed when upgrading past this PR
+    # https://github.com/ROCm/rocm-libraries/pull/10042
+    ./fix-imports-cpu.patch
+  ];
 
   nativeBuildInputs = [
     cmake
     rocm-cmake
     clr
+    gfortran
   ]
   ++ lib.optionals buildDocs [
     rocm-docs-core
@@ -45,21 +60,21 @@ stdenv.mkDerivation (finalAttrs: {
   ];
 
   cmakeFlags = [
-    "-DROCM_PATH=${clr}"
-    "-DCMAKE_INSTALL_BINDIR=bin"
-    "-DCMAKE_INSTALL_LIBDIR=lib"
-    "-DCMAKE_INSTALL_INCLUDEDIR=include"
-    "-DBACKEND=${if useCPU then "CPU" else "HIP"}"
+    (lib.cmakeFeature "ROCM_PATH" "${clr}")
+    (lib.cmakeFeature "CMAKE_INSTALL_BINDIR" "bin")
+    (lib.cmakeFeature "CMAKE_INSTALL_LIBDIR" "lib")
+    (lib.cmakeFeature "CMAKE_INSTALL_INCLUDEDIR" "include")
+    (lib.cmakeFeature "BACKEND" "${if useCPU then "CPU" else "HIP"}")
   ]
   ++ lib.optionals (gpuTargets != [ ]) [
-    "-DAMDGPU_TARGETS=${lib.concatStringsSep ";" gpuTargets}"
+    (lib.cmakeFeature "GPU_TARGETS" "${lib.concatStringsSep ";" gpuTargets}")
   ];
 
-  postPatch = lib.optionalString (!useCPU) ''
-    # Bad path
-    substituteInPlace CMakeLists.txt \
-      --replace "COMPILER_FOR_HIP \''${ROCM_PATH}/llvm/bin/clang++" "COMPILER_FOR_HIP ${clr}/bin/hipcc"
-  '';
+  # fixes error: 'posix_memalign' is missing exception specification 'noexcept(true)'
+  # during the CPU build. Likely due to rpp adding `-fopenmp` when building without HIP
+  env = lib.optionalAttrs useCPU {
+    CXXFLAGS = "-isystem ${stdenv.cc}/include";
+  };
 
   postBuild = lib.optionalString buildDocs ''
     python3 -m sphinx -T -E -b html -d _build/doctrees -D language=en ../docs _build/html

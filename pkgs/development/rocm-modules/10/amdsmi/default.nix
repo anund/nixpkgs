@@ -6,6 +6,8 @@
   cmake,
   pkg-config,
   libdrm,
+  libmnl,
+  libnl,
   python,
   wrapPython,
   autoPatchelfHook,
@@ -15,43 +17,32 @@ let
   esmi_ib_src = fetchFromGitHub {
     owner = "amd";
     repo = "esmi_ib_library";
-    tag = "esmi_pkg_ver-4.2";
-    hash = "sha256-czF9ezkAO0PuDkXh8y639AcOZH+KVcWiXPX74H5W/nw=";
+    # https://github.com/ROCm/rocm-systems/blob/therock-10.0/projects/amdsmi/CMakeLists.txt#L263
+    rev = "d494a3194ceb4cc4dbb2debf9fcbe8773c6d3bef";
+    hash = "sha256-StSYzyIujaH8UJIRpfJC0lf+oVT9fWflJgQONvRqu70=";
   };
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "amdsmi";
-  version = "7.2.4";
+  version = "10.0";
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "rocm-systems";
-    tag = "rocm-${finalAttrs.version}";
+    tag = "therock-${finalAttrs.version}";
     sparseCheckout = [
       "projects/amdsmi"
       "shared"
     ];
-    hash = "sha256-TFi+3txemvV6K827e8S3hZOd9jcj4Qzop6V9CdKrpLg=";
+    hash = "sha256-yhgSwRk9vL40bmnAE3im7DOXy6uMA7NTZxPp5fQC7Qo=";
   };
   sourceRoot = "${finalAttrs.src.name}/projects/amdsmi";
 
   postPatch = ''
-    substituteInPlace goamdsmi_shim/CMakeLists.txt \
-      --replace-fail "amd_smi)" ${"'"}''${AMD_SMI_TARGET})' \
-      --replace-fail 'target_link_libraries(''${GOAMDSMI_SHIM_TARGET} -L' '#'
-    substituteInPlace CMakeLists.txt \
-      --replace-fail "if(NOT latest_esmi_tag STREQUAL current_esmi_tag)" "if(OFF)"
-
     # Manually unpack esmi_ib_src and add amd_hsmp.h so execute-process git clone doesn't run
     cp -rf --no-preserve=mode ${esmi_ib_src} ./esmi_ib_library
     mkdir -p ./esmi_ib_library/include/asm
     cp ./include/amd_smi/impl/amd_hsmp.h ./esmi_ib_library/include/asm/amd_hsmp.h
   '';
-
-  patches = [
-    # Fix error: redefinition of 'struct drm_color_ctm_3x4'
-    # https://github.com/ROCm/amdsmi/pull/165
-    ./drm-struct-redefinition-fix.patch
-  ];
 
   nativeBuildInputs = [
     cmake
@@ -62,6 +53,8 @@ stdenv.mkDerivation (finalAttrs: {
 
   buildInputs = [
     libdrm
+    libmnl
+    libnl
   ];
 
   cmakeFlags = [

@@ -78,7 +78,7 @@ let
       #  inherit (self) rocmUpdateScript;
       #};
 
-      #aqlprofile = self.callPackage ./aqlprofile { };
+      aqlprofile = self.callPackage ./aqlprofile { };
 
       #rdc = self.callPackage ./rdc { };
 

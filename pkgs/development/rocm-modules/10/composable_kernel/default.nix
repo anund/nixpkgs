@@ -4,9 +4,14 @@
   composable_kernel_base,
 }:
 
+# Notes on names:
+# https://github.com/ROCm/rocm-libraries/pull/5945 split out instances used by multiple layouts into separate folders
+# where the make target used to be 'device_{folder}_instance' in some cases it is now 'device_{folder}_{layout}_instance'
+# miOpenReqLibsOnly layouts include only 'nhwgc' and 'ndhwgc' as of 10.0.
 let
-  inherit (composable_kernel_base) miOpenReqLibsOnly;
+  inherit (composable_kernel_base) miOpenReqLibsOnly dlKernels;
   parts = {
+    # will fail to find targets if there are no gfx9* targets in the list
     _mha = {
       enabled = !miOpenReqLibsOnly;
       # mha takes ~3hrs on 64 cores on an EPYC milan system at ~2.5GHz
@@ -20,7 +25,15 @@ let
         "device_mha_instance"
       ];
       extraCmakeFlags = [ "-DHIP_CLANG_NUM_PARALLEL_JOBS=2" ];
+      onlyFor = [
+        "gfx942"
+        "gfx950"
+        "gfx90a"
+      ];
     };
+
+    # custom targets see:
+    # https://github.com/ROCm/rocm-libraries/blob/therock-10.0/projects/composablekernel/library/src/tensor_operation_instance/gpu/CMakeLists.txt
     gemm_multiply_multiply = {
       enabled = !miOpenReqLibsOnly;
       targets = [
@@ -30,69 +43,184 @@ let
       onlyFor = [
         "gfx942"
         "gfx950"
+        "gfx1100"
+        "gfx1101"
+        "gfx1102"
+        "gfx1103"
+        "gfx1150"
+        "gfx1151"
+        "gfx1152"
+        "gfx1153"
+        "gfx1200"
+        "gfx1201"
       ];
     };
     gemm_multiply_multiply_wp = {
       enabled = !miOpenReqLibsOnly;
       targets = [
         "device_gemm_multiply_multiply_wp_instance"
+        "device_gemm_universal_preshuffle_instance"
       ];
       extraCmakeFlags = [ "-DHIP_CLANG_NUM_PARALLEL_JOBS=2" ];
       onlyFor = [
         "gfx942"
         "gfx950"
+        "gfx1200"
+        "gfx1201"
       ];
     };
-    grouped_conv_bwd = {
+    gemm_ab_scale = {
+      enabled = !miOpenReqLibsOnly;
       targets = [
-        "device_grouped_conv1d_bwd_weight_instance"
-        "device_grouped_conv2d_bwd_data_instance"
-        "device_grouped_conv2d_bwd_weight_instance"
+        "device_gemm_ab_scale_instance"
+        "device_gemm_blockscale_wp_instance"
+      ];
+      onlyFor = [
+        "gfx942"
+        "gfx950"
+        "gfx1100"
+        "gfx1101"
+        "gfx1102"
+        "gfx1103"
+        "gfx1150"
+        "gfx1151"
+        "gfx1152"
+        "gfx1153"
+        "gfx1200"
+        "gfx1201"
       ];
     };
-    grouped_conv_fwd = {
+    gemm_mx = {
+      enabled = !miOpenReqLibsOnly;
       targets = [
-        "device_grouped_conv1d_fwd_instance"
-        "device_grouped_conv2d_fwd_instance"
-        "device_grouped_conv2d_fwd_bias_bnorm_clamp_instance"
-        "device_grouped_conv2d_fwd_bias_clamp_instance"
-        "device_grouped_conv2d_fwd_clamp_instance"
-        "device_grouped_conv2d_fwd_dynamic_op_instance"
+        "device_gemm_mx_instance"
+      ];
+      onlyFor = [
+        "gfx950"
       ];
     };
+    contraction = {
+      enabled = !miOpenReqLibsOnly;
+      targets = [
+        "device_contraction_bilinear_instance"
+        "device_contraction_scale_instance"
+      ];
+      onlyFor = [
+        "gfx942"
+        "gfx950"
+        "gfx1100"
+        "gfx1101"
+        "gfx1102"
+        "gfx1103"
+        "gfx1150"
+        "gfx1151"
+        "gfx1152"
+        "gfx1153"
+        "gfx1200"
+        "gfx1201"
+      ];
+    };
+    gemm_bilinear = {
+      enabled = !miOpenReqLibsOnly;
+      targets = [
+        "device_gemm_bilinear_instance"
+      ];
+      onlyFor = [
+        "gfx1100"
+        "gfx1101"
+        "gfx1102"
+        "gfx1103"
+        "gfx1150"
+        "gfx1151"
+        "gfx1152"
+        "gfx1153"
+        "gfx1200"
+        "gfx1201"
+      ];
+    };
+    grouped_conv_bwd1 = {
+      targets = [
+        "device_grouped_conv2d_bwd_data_nhwgc_instance"
+        "device_grouped_conv2d_bwd_weight_nhwgc_instance"
+      ];
+    };
+    grouped_conv_bwd2= {
+      enabled = !miOpenReqLibsOnly;
+      targets = [
+        "device_grouped_conv1d_bwd_weight_gnwc_instance"
+        "device_grouped_conv2d_bwd_data_gnhwc_instance"
+        "device_grouped_conv2d_bwd_data_ngchw_instance"
+        "device_grouped_conv2d_bwd_weight_gnhwc_instance"
+        "device_grouped_conv2d_bwd_weight_ngchw_instance"
+      ];
+    };
+    grouped_conv_fwd1= {
+      targets = [
+        "device_grouped_conv2d_fwd_bias_bnorm_clamp_nhwgc_instance"
+        "device_grouped_conv2d_fwd_bias_clamp_nhwgc_instance"
+        "device_grouped_conv2d_fwd_clamp_nhwgc_instance"
+        "device_grouped_conv2d_fwd_dynamic_op_nhwgc_instance"
+        "device_grouped_conv2d_fwd_nhwgc_instance"
+      ];
+    };
+    grouped_conv_fwd2 = {
+      enabled = !miOpenReqLibsOnly;
+      targets = [
+        "device_grouped_conv1d_fwd_gnwc_instance"
+        "device_grouped_conv2d_fwd_gnhwc_instance"
+        "device_grouped_conv2d_fwd_ngchw_instance"
+      ];
+    };
+
     grouped_conv_bwd_3d1 = {
       targets = [
-        "device_grouped_conv3d_bwd_data_instance"
-        "device_grouped_conv3d_bwd_data_bilinear_instance"
-        "device_grouped_conv3d_bwd_data_scale_instance"
+        "device_grouped_conv3d_bwd_data_bilinear_ndhwgc_instance"
+        "device_grouped_conv3d_bwd_data_ndhwgc_instance"
+        "device_grouped_conv3d_bwd_data_scale_ndhwgc_instance"
       ];
     };
     grouped_conv_bwd_3d2 = {
       targets = [
-        "device_grouped_conv3d_bwd_weight_instance"
-        "device_grouped_conv3d_bwd_weight_bilinear_instance"
-        "device_grouped_conv3d_bwd_weight_scale_instance"
+        "device_grouped_conv3d_bwd_weight_bilinear_ndhwgc_instance"
+        "device_grouped_conv3d_bwd_weight_ndhwgc_instance"
+        "device_grouped_conv3d_bwd_weight_scale_ndhwgc_instance"
+      ];
+    };
+    grouped_conv_bwd_3d3 = {
+      enabled = !miOpenReqLibsOnly;
+      targets = [
+        "device_grouped_conv3d_bwd_data_gndhwc_instance"
+        "device_grouped_conv3d_bwd_data_ngcdhw_instance"
+        "device_grouped_conv3d_bwd_weight_gndhwc_instance"
+        "device_grouped_conv3d_bwd_weight_ngcdhw_instance"
       ];
     };
     grouped_conv_fwd_3d1 = {
       targets = [
-        "device_grouped_conv3d_fwd_instance"
-        "device_grouped_conv3d_fwd_clamp_instance"
-        "device_grouped_conv3d_fwd_bias_bnorm_clamp_instance"
-        "device_grouped_conv3d_fwd_bias_clamp_instance"
-        "device_grouped_conv3d_fwd_bilinear_instance"
-        "device_grouped_conv3d_fwd_convinvscale_instance"
-        "device_grouped_conv3d_fwd_convscale_instance"
-        "device_grouped_conv3d_fwd_convscale_add_instance"
+        "device_grouped_conv3d_fwd_bias_bnorm_clamp_ndhwgc_instance"
+        "device_grouped_conv3d_fwd_bias_clamp_ndhwgc_instance"
+        "device_grouped_conv3d_fwd_bilinear_ndhwgc_instance"
+        "device_grouped_conv3d_fwd_clamp_ndhwgc_instance"
+        "device_grouped_conv3d_fwd_convinvscale_ndhwgc_instance"
+        "device_grouped_conv3d_fwd_convscale_add_ndhwgc_instance"
+        "device_grouped_conv3d_fwd_convscale_ndhwgc_instance"
+        "device_grouped_conv3d_fwd_ndhwgc_instance"
       ];
     };
     grouped_conv_fwd_3d2 = {
       targets = [
-        "device_grouped_conv3d_fwd_convscale_relu_instance"
-        "device_grouped_conv3d_fwd_dynamic_op_instance"
-        "device_grouped_conv3d_fwd_scale_instance"
-        "device_grouped_conv3d_fwd_scaleadd_ab_instance"
-        "device_grouped_conv3d_fwd_scaleadd_scaleadd_relu_instance"
+        "device_grouped_conv3d_fwd_convscale_relu_ndhwgc_instance"
+        "device_grouped_conv3d_fwd_dynamic_op_ndhwgc_instance"
+        "device_grouped_conv3d_fwd_scale_ndhwgc_instance"
+        "device_grouped_conv3d_fwd_scaleadd_ab_ndhwgc_instance"
+        "device_grouped_conv3d_fwd_scaleadd_scaleadd_relu_ndhwgc_instance"
+      ];
+    };
+    grouped_conv_fwd_3d3 = {
+      enabled = !miOpenReqLibsOnly;
+      targets = [
+        "device_grouped_conv3d_fwd_gndhwc_instance"
+        "device_grouped_conv3d_fwd_ngcdhw_instance"
       ];
     };
     grouped_conv_fwd_nd = {
@@ -136,7 +264,6 @@ let
       enabled = !miOpenReqLibsOnly;
       targets = [
         "device_gemm_universal_reduce_instance"
-        "device_gemm_universal_streamk_instance"
       ];
     };
     gemm_other1 = {
@@ -144,7 +271,6 @@ let
       targets = [
         "device_gemm_instance"
         "device_gemm_b_scale_instance"
-        "device_gemm_ab_scale_instance"
         "device_gemm_add_instance"
         "device_gemm_add_add_fastgelu_instance"
         "device_gemm_add_fastgelu_instance"
@@ -158,13 +284,11 @@ let
         "device_gemm_add_relu_add_layernorm_instance"
         "device_gemm_add_silu_instance"
         "device_gemm_bias_add_reduce_instance"
-        "device_gemm_bilinear_instance"
         "device_gemm_fastgelu_instance"
         "device_gemm_multi_abd_instance"
         "device_gemm_multiply_add_instance"
         "device_gemm_reduce_instance"
         "device_gemm_splitk_instance"
-        "device_gemm_streamk_instance"
       ];
     };
     conv = {
@@ -219,6 +343,20 @@ let
         "device_normalization_fwd_instance"
         "device_softmax_instance"
         "device_transpose_instance"
+      ];
+    };
+    dl_kernels= {
+      enabled = dlKernels;
+      targets = [
+        "device_batched_gemm_multi_d_instance"
+        "device_grouped_conv1d_bwd_weight_gnwc_instance"
+        "device_grouped_conv1d_bwd_weight_nwgc_instance"
+        "device_grouped_conv2d_bwd_weight_nhwgc_instance"
+        "device_grouped_conv2d_bwd_weight_gnhwc_instance"
+        "device_grouped_conv2d_bwd_weight_ngchw_instance"
+        "device_grouped_conv3d_bwd_weight_ndhwgc_instance"
+        "device_grouped_conv3d_bwd_weight_gndhwc_instance"
+        "device_grouped_conv3d_bwd_weight_ngcdhw_instance"
       ];
     };
   };
@@ -313,7 +451,7 @@ composable_kernel_base.overrideAttrs (
     };
     meta = old.meta // {
       # Builds without any gfx9 fail
-      broken = !finalAttrs.passthru.anyGfx9Target;
+      broken = !finalAttrs.passthru.anySupportedGfxTarget;
     };
   }
 )

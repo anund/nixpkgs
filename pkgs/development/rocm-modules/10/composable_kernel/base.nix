@@ -20,11 +20,9 @@
   # and building specific instances, as done with ck4inductor/torch
   miOpenReqLibsOnly ? true,
   withDeprecatedKernels ? false,
+  dlKernels ? false,
   gpuTargets ? (
     clr.localGpuTargets or [
-      "gfx900"
-      "gfx906"
-      "gfx908"
       "gfx90a"
       "gfx942"
       "gfx950"
@@ -44,7 +42,7 @@ stdenv.mkDerivation (finalAttrs: {
   '';
 
   pname = "composable_kernel_base";
-  version = "7.2.4";
+  version = "10.0";
 
   outputs = [
     "out"
@@ -59,12 +57,12 @@ stdenv.mkDerivation (finalAttrs: {
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "rocm-libraries";
-    tag = "rocm-${finalAttrs.version}";
+    tag = "therock-${finalAttrs.version}";
     sparseCheckout = [
       projectRoot
       "shared"
     ];
-    hash = "sha256-Zs6wwPmys1kUlgDD4XzKKw273nH/Ur3HtuYxJjvjDs0=";
+    hash = "sha256-zwJ8jPv9gtMc0PHNQuu6R0kgO59uDfPtrVZ8Tv3Wwjs=";
   };
   sourceRoot = "${finalAttrs.src.name}/${projectRoot}";
 
@@ -100,9 +98,8 @@ stdenv.mkDerivation (finalAttrs: {
     (lib.cmakeBool "DISABLE_DL_KERNELS" true)
     (lib.cmakeBool "DISABLE_DPP_KERNELS" true)
     (lib.cmakeBool "CK_TIME_KERNEL" false)
-    "-DCMAKE_MODULE_PATH=${clr}/hip/cmake"
-    "-DCMAKE_POLICY_DEFAULT_CMP0069=NEW"
-    "-DDL_KERNELS=OFF"
+    (lib.cmakeFeature "CMAKE_MODULE_PATH" "${clr}/hip/cmake")
+    (lib.cmakeFeature "DL_KERNELS" "${if dlKernels then "YES" else "NO"}")
     # CK_USE_CODEGEN Required for migraphx which uses device_gemm_multiple_d.hpp
     # but migraphx requires an incompatible fork of CK and fails anyway
     # "-DCK_USE_CODEGEN=ON"
@@ -110,28 +107,28 @@ stdenv.mkDerivation (finalAttrs: {
     # "-DDTYPES=fp32;fp16;fp8;bf16;int8"
     # Manually define CMAKE_INSTALL_<DIR>
     # See: https://github.com/NixOS/nixpkgs/pull/197838
-    "-DCMAKE_INSTALL_BINDIR=bin"
-    "-DCMAKE_INSTALL_LIBDIR=lib"
-    "-DCMAKE_INSTALL_INCLUDEDIR=include"
-    "-DBUILD_DEV=OFF"
-    "-DBUILD_MHA_LIB=ON"
-    "-DROCM_PATH=${clr}"
-    "-DENABLE_CLANG_CPP_CHECKS=OFF"
-    "-DCMAKE_HIP_COMPILER_ROCM_ROOT=${clr}"
+    (lib.cmakeFeature "CMAKE_INSTALL_BINDIR" "bin")
+    (lib.cmakeFeature "CMAKE_INSTALL_LIBDIR" "lib")
+    (lib.cmakeFeature "CMAKE_INSTALL_INCLUDEDIR" "include")
+    (lib.cmakeFeature "BUILD_DEV" "OFF")
+    (lib.cmakeFeature "BUILD_MHA_LIB" "ON")
+    (lib.cmakeFeature "ROCM_PATH" "${clr}")
+    (lib.cmakeFeature "ENABLE_CLANG_CPP_CHECKS" "OFF")
+    (lib.cmakeFeature "CMAKE_HIP_COMPILER_ROCM_ROOT" "${clr}")
 
     # FP8 can build for 908/90a but very slow build
     # and produces unusably slow kernels that are huge
-    "-DCK_USE_FP8_ON_UNSUPPORTED_ARCH=OFF"
+    (lib.cmakeFeature "CK_USE_FP8_ON_UNSUPPORTED_ARCH" "OFF")
   ]
   ++ lib.optionals (gpuTargets != [ ]) [
     # We intentionally set GPU_ARCHS and not AMD/GPU_TARGETS
     # per readme this is required if archs are dissimilar
     # In rocm-6.3.x not setting any arch flag worked
     # but setting dissimilar arches always failed
-    "-DGPU_ARCHS=${lib.concatStringsSep ";" gpuTargets}"
+    (lib.cmakeFeature "GPU_ARCHS" "${lib.concatStringsSep ";" gpuTargets}")
   ]
   ++ lib.optionals buildTests [
-    "-DGOOGLETEST_DIR=${gtest.src}" # Custom linker names
+    (lib.cmakeFeature "GOOGLETEST_DIR" "${gtest.src}") # Custom linker names
   ];
 
   patches = [
@@ -180,11 +177,16 @@ stdenv.mkDerivation (finalAttrs: {
     '';
 
   passthru = {
-    inherit gpuTargets miOpenReqLibsOnly;
+    inherit gpuTargets miOpenReqLibsOnly dlKernels;
     composable_kernel_src = "${finalAttrs.src}/${projectRoot}";
 
     updateScript = rocmUpdateScript { inherit finalAttrs; };
-    anyGfx9Target = lib.lists.any (lib.strings.hasPrefix "gfx9") gpuTargets;
+    #https://github.com/ROCm/rocm-libraries/blob/therock-10.0/projects/composablekernel/profiler/src/CMakeLists.txt#L265C35-L265C48
+    anySupportedGfxTarget = lib.lists.any (s:
+      lib.strings.hasPrefix "gfx9" s ||
+      lib.strings.hasPrefix "gfx11" s ||
+      lib.strings.hasPrefix "gfx12" s
+    ) gpuTargets;
     anyMfmaTarget =
       (lib.lists.intersectLists gpuTargets [
         "gfx908"

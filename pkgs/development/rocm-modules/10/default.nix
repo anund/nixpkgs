@@ -106,7 +106,7 @@ let
 
       rocdbgapi = self.callPackage ./rocdbgapi { };
 
-      #rocr-debug-agent = self.callPackage ./rocr-debug-agent { };
+      rocr-debug-agent = self.callPackage ./rocr-debug-agent { };
 
       rocprim = self.callPackage ./rocprim { };
 

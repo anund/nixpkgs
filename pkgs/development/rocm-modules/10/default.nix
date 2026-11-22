@@ -173,7 +173,7 @@ let
       #  inherit (self) composable_kernel rocm-toolchain;
       #};
 
-      #half = self.callPackage ./half { };
+      half = self.callPackage ./half { };
 
       #miopen = self.callPackage ./miopen {
       #  boost = boost179.override { enableStatic = true; };

@@ -23,13 +23,13 @@
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "rocgdb";
-  version = "7.2.4";
+  version = "10.0";
 
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "ROCgdb";
-    tag = "rocm-${finalAttrs.version}";
-    hash = "sha256-oml/HLExnnjh7+axeWPZRWecpwK2BnzVOaGvXYhrxKs=";
+    tag = "therock-${finalAttrs.version}";
+    hash = "sha256-/cZuOrBZhdKlNDAfUeo38LJlH7mz7B3kMVXjlWCJR98=";
   };
 
   nativeBuildInputs = [
@@ -106,7 +106,16 @@ stdenv.mkDerivation (finalAttrs: {
   meta = {
     description = "ROCm source-level debugger for Linux, based on GDB";
     homepage = "https://github.com/ROCm/ROCgdb";
-    license = lib.licenses.gpl3Plus;
+    license = with lib.licenses; [
+      gpl2Plus
+      gpl3Plus
+      lgpl2Plus
+      lgpl2Only
+      bsd3
+      bsd2
+      mit
+      publicDomain
+    ];
     teams = [ lib.teams.rocm ];
     platforms = lib.platforms.linux;
   };

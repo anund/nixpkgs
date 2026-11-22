@@ -102,7 +102,7 @@ let
 
       #rocprof-trace-decoder = self.callPackage ./rocprof-trace-decoder { };
 
-      #rocgdb = self.callPackage ./rocgdb { };
+      rocgdb = self.callPackage ./rocgdb { };
 
       rocdbgapi = self.callPackage ./rocdbgapi { };
 

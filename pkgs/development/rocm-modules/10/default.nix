@@ -108,7 +108,7 @@ let
 
       #rocr-debug-agent = self.callPackage ./rocr-debug-agent { };
 
-      #rocprim = self.callPackage ./rocprim { };
+      rocprim = self.callPackage ./rocprim { };
 
       #rocsparse = self.callPackage ./rocsparse { };
 

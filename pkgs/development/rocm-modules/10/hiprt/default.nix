@@ -9,13 +9,13 @@
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "hiprt";
-  version = "3.0.3.a1525e7";
+  version = "3.2.0.ccf3068";
 
   src = fetchFromGitHub {
     owner = "GPUOpen-LibrariesAndSDKs";
     repo = "HIPRT";
     tag = finalAttrs.version;
-    hash = "sha256-7r7KO+WuXOeQQhYLYpJRrD4ZqVsBOqaD2NGD15CWnoo=";
+    hash = "sha256-MvkIO9wbivG7vhyGCsNdrNuCOVgU783aWXR5vl9/t4M=";
   };
 
   postPatch = ''
@@ -25,6 +25,17 @@ stdenv.mkDerivation (finalAttrs: {
       --replace-fail \
         'COMMAND ''${CMAKE_CURRENT_SOURCE_DIR}/tools/bakeKernel.sh' \
         'COMMAND bash ''${CMAKE_CURRENT_SOURCE_DIR}/tools/bakeKernel.sh'
+  ''
+  + ''
+    # TODO: below fails to regain parallel execution, it only disables the warning messages about unused -parallel-jobs
+    # can be removed when https://github.com/GPUOpen-LibrariesAndSDKs/HIPRT/issues/21 is resloved
+    substituteInPlace contrib/Orochi/scripts/kernelCompile.py \
+      --replace-fail "-parallel-jobs=15" ""
+    substituteInPlace scripts/bitcodes/precompile_bitcode.py \
+      --replace-fail "-parallel-jobs=15" ""
+
+    substituteInPlace scripts/bitcodes/compile.py \
+      --replace-fail "-parallel-jobs=' + str(parallel_jobs) + '" ""
   '';
 
   nativeBuildInputs = [

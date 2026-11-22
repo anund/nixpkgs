@@ -129,7 +129,7 @@ let
 
       #hipsparse = self.callPackage ./hipsparse { };
 
-      #hipfort = self.callPackage ./hipfort { };
+      hipfort = self.callPackage ./hipfort { };
 
       #hipfft = self.callPackage ./hipfft { };
 

@@ -10,13 +10,13 @@
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "hipfort";
-  version = "7.2.4";
+  version = "10.0.0";
 
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "hipfort";
     tag = "rocm-${finalAttrs.version}";
-    hash = "sha256-XaB4jauCN41tgD1YHHA2td/yckwfMBemBe/iL0SCxQo=";
+    hash = "sha256-qyBz+zFwJOjjmKFKKw9Cxo7kDDXlMFhPhuJIYykPpDs=";
   };
 
   __structuredAttrs = true;
@@ -41,20 +41,6 @@ stdenv.mkDerivation (finalAttrs: {
     (lib.cmakeFeature "CMAKE_INSTALL_LIBDIR" "lib")
     (lib.cmakeFeature "CMAKE_INSTALL_INCLUDEDIR" "include")
   ];
-
-  postPatch = ''
-    patchShebangs bin
-
-    substituteInPlace bin/hipfc bin/mymcpu \
-      --replace-fail "/bin/cat" "cat"
-
-    substituteInPlace bin/CMakeLists.txt \
-      --replace-fail "/bin/mkdir" "mkdir" \
-      --replace-fail "/bin/cp" "cp" \
-      --replace-fail "/bin/sed" "sed" \
-      --replace-fail "/bin/chmod" "chmod" \
-      --replace-fail "/bin/ln" "ln"
-  '';
 
   passthru.updateScript = rocmUpdateScript { inherit finalAttrs; };
 

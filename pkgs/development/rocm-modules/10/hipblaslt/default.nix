@@ -1,31 +1,41 @@
 {
-  lib,
-  stdenv,
-  fetchFromGitHub,
+  amd-blis,
+  boost,
   cmake,
-  rocm-cmake,
-  rocm-smi,
-  pkg-config,
-  clr,
+  fetchFromGitHub,
+  fmt,
   gfortran,
   gtest,
-  boost,
-  llvm,
-  msgpack-cxx,
-  amd-blis,
-  libxml2,
-  python3,
-  python3Packages,
-  openmp,
-  hipblas-common,
+  jemalloc,
   lapack-reference,
+  lib,
+  libffi,
+  libxml2,
+  msgpack-cxx,
   ncurses,
   ninja,
-  libffi,
-  jemalloc,
+  openmp,
+  pkg-config,
+  python3,
+  python3Packages,
+  spdlog,
+  stdenv,
+  yaml-cpp,
   zlib,
   zstd,
+
+  # rocmPackages imports
+  amdsmi,
+  clr,
+  hipblas-common,
+  libdivide,
+  llvm,
+  rocm-cmake,
+  rocm-comgr,
+  rocm-device-libs,
+  rocm-runtime,
   rocmUpdateScript,
+
   buildTests ? false,
   buildSamples ? false,
   # hipblaslt supports only devices with MFMA or WMMA
@@ -43,19 +53,25 @@ let
       "gfx950"
       "gfx1100"
       "gfx1101"
+      "gfx1102"
+      "gfx1103"
       "gfx1150"
       "gfx1151"
+      "gfx1152"
+      "gfx1153"
       "gfx1200"
       "gfx1201"
+      "gfx1250"
     ]
   );
   supportsTargetArches = supportedTargets != [ ];
   py = python3.withPackages (ps: [
+    ps.joblib
+    ps.msgpack
+    ps.nanobind
+    ps.packaging
     ps.pyyaml
     ps.setuptools
-    ps.packaging
-    ps.nanobind
-    ps.msgpack
   ]);
   # workaround: build for one working target if no targets are supported
   # a few CXX files are still build for the device
@@ -70,13 +86,13 @@ let
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "hipblaslt${clr.gpuArchSuffix}";
-  version = "7.2.4";
+  version = "10.0";
 
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "rocm-libraries";
-    tag = "rocm-${finalAttrs.version}";
-    hash = "sha256-+xMmPKb32NP9U35dHCXfXWwa6exfiL5TezfXERVDfe4=";
+    tag = "therock-${finalAttrs.version}";
+    hash = "sha256-EWigr1BkmTgwAm7u9kG1iBkhedhupp3IU3LA3UGnHmM=";
     sparseCheckout = [
       "projects/hipblaslt"
       "shared"
@@ -86,7 +102,10 @@ stdenv.mkDerivation (finalAttrs: {
       find $out -name '*.yaml' -path '*/Tensile/Logic/*' -exec ${lib.getExe zstd} --rm {} \;
     '';
   };
-  sourceRoot = "${finalAttrs.src.name}/projects/hipblaslt";
+  # rocroller requires patching, rocroller is in shared complicating patching
+  # manually set sourceRoot in postPatch
+  #sourceRoot = "${finalAttrs.src.name}/projects/hipblaslt";
+
   env.CXX = compiler;
   env.CFLAGS = cFlags;
   env.CXXFLAGS = cFlags;
@@ -117,13 +136,29 @@ stdenv.mkDerivation (finalAttrs: {
     # parallel-jobs for these invocations
     # https://github.com/ROCm/rocm-libraries/issues/1242
     ./parallel-buildSourceCodeObjectFile.diff
-    # Support loading zstd compressed .dat files, required to keep output under
-    # hydra size limit
-    ./messagepack-compression-support.patch
-    # [hipblaslt] Refactor Parallel.py to drop joblib, massively reduce peak disk space usage
+  ]
+  ++ [
+    # fixes unknown type name 'uint32_t'
+    ./rocroller-includes-fixes.patch
+  ]
+  ++ [
+    # cmake seems to override/ignore/need a different path to set
+    # (lib.cmakeBool "ROCROLLER_ENABLE_FETCH" false)
+    # when that's true the current yaml-cpp cmake attempts to git fetch
+    # other targets are protected by 'find_package' first
+    ./cmake-fix-yaml-cpp-lookup.patch
+  ]
+  ++ [
+    # memory foot print patches based on past work
     # https://github.com/ROCm/rocm-libraries/pull/2073
-    ./TensileCreateLibrary-refactor.patch
-    ./Tensile-interning.patch
+    ./0001-memory-usage-logging.patch
+    ./0002-skip-compression-on-assembled_kernels.patch
+    ./0003-intern-strings.patch
+    ./0004-cache-parse-results.patch
+  ]
+  ++ [
+    # https://github.com/ROCm/rocm-libraries/issues/1242
+    ./0005-fixed-job-size.patch
   ];
 
   preConfigure = ''
@@ -131,39 +166,58 @@ stdenv.mkDerivation (finalAttrs: {
   '';
 
   postPatch = ''
-    # git isn't needed and we have no .git
-    substituteInPlace cmake/dependencies.cmake \
-      --replace-fail "find_package(Git REQUIRED)" ""
+    # manually transition to what should be sourceRoot
+    cd projects/hipblaslt
+
     substituteInPlace CMakeLists.txt \
       --replace-fail " LANGUAGES CXX" " LANGUAGES CXX C ASM"
+
+    # needs git if rocm-cmake can't be found, ignore
+    substituteInPlace /build/source/shared/origami/cmake/dependencies.cmake \
+      --replace-fail "find_package(Git REQUIRED)" ""
+
+    # linting tool that lives in <root>/cmake/modules/ so isn't present in sparse checkout
+    substituteInPlace /build/source/shared/stinkytofu/CMakeLists.txt \
+      --replace-fail 'include(ClangTidy)' "" \
+      --replace-fail 'add_clang_tidy_custom_target()' ""
+  '';
+
+  preBuild = ''
+    # Tensile wants to write to <home>/.tensile/helper_cache during the build
+    export HOME=$(mktemp -d)
   '';
 
   doCheck = false;
   doInstallCheck = true;
 
   nativeBuildInputs = [
-    cmake
-    rocm-cmake
-    py
+    amdsmi
     clr
+    cmake
     gfortran
-    pkg-config
     ninja
-    rocm-smi
+    pkg-config
+    py
     zstd
   ];
 
   buildInputs = [
-    llvm.llvm
-    clr
-    rocm-cmake
     hipblas-common
-    amd-blis
-    rocm-smi
-    openmp
-    libffi
-    ncurses
     lapack-reference
+    libdivide
+    libffi
+    llvm.llvm
+    rocm-cmake
+    rocm-comgr
+    rocm-device-libs
+    rocm-runtime
+
+    amd-blis
+    fmt
+    ncurses
+    openmp
+    spdlog
+    yaml-cpp
 
     # Tensile deps - not optional, building without tensile isn't actually supported
     msgpack-cxx
@@ -184,23 +238,19 @@ stdenv.mkDerivation (finalAttrs: {
     (lib.cmakeBool "HIPBLASLT_BUILD_TESTING" buildTests)
     (lib.cmakeBool "HIPBLASLT_ENABLE_SAMPLES" buildSamples)
     (lib.cmakeBool "HIPBLASLT_ENABLE_DEVICE" supportsTargetArches)
-    # FIXME: Enable for ROCm 7.x
-    (lib.cmakeBool "HIPBLASLT_ENABLE_ROCROLLER" false)
-    "-DCMAKE_C_COMPILER=amdclang"
-    "-DCMAKE_HIP_COMPILER=${compiler}"
-    "-DCMAKE_CXX_COMPILER=${compiler}"
-    "-DROCM_FOUND=ON" # hipblaslt tries to download rocm-cmake if this isn't set
-    "-DBLIS_ROOT=${amd-blis}"
-    "-DBLIS_LIB=${amd-blis}/lib/libblis-mt.so"
-    "-DBLIS_INCLUDE_DIR=${amd-blis}/include/blis/"
-    "-DBLA_PREFER_PKGCONFIG=ON"
-    "-DFETCHCONTENT_SOURCE_DIR_NANOBIND=${python3Packages.nanobind.src}"
+    (lib.cmakeFeature "CMAKE_C_COMPILER" "amdclang")
+    (lib.cmakeFeature "CMAKE_CXX_COMPILER" "${compiler}")
+    (lib.cmakeFeature "BLIS_ROOT" "${amd-blis}")
+    (lib.cmakeFeature "BLIS_LIB" "${amd-blis}/lib/libblis-mt.so")
+    (lib.cmakeFeature "BLIS_INCLUDE_DIR" "${amd-blis}/include/blis/")
+    (lib.cmakeFeature "BLA_PREFER_PKGCONFIG" "ON")
+    (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_NANOBIND" "${python3Packages.nanobind.src}")
     # Manually define CMAKE_INSTALL_<DIR>
     # See: https://github.com/NixOS/nixpkgs/pull/197838
-    "-DCMAKE_INSTALL_BINDIR=bin"
-    "-DCMAKE_INSTALL_LIBDIR=lib"
-    "-DCMAKE_INSTALL_INCLUDEDIR=include"
-    "-DHIPBLASLT_ENABLE_MARKER=Off"
+    (lib.cmakeFeature "CMAKE_INSTALL_BINDIR" "bin")
+    (lib.cmakeFeature "CMAKE_INSTALL_LIBDIR" "lib")
+    (lib.cmakeFeature "CMAKE_INSTALL_INCLUDEDIR" "include")
+    (lib.cmakeFeature "HIPBLASLT_ENABLE_MARKER" "Off")
   ];
 
   postInstall =
@@ -214,7 +264,10 @@ stdenv.mkDerivation (finalAttrs: {
     # Move binaries to appropriate outputs and delete leftover /bin
     + ''
       mkdir -p $benchmark/bin
-      mv $out/bin/hipblaslt-{api-overhead,bench*} $out/bin/*.yaml $out/bin/*.py $benchmark/bin
+      mv $out/bin/hipblaslt-{api-overhead,bench*,cotenant*,perf} \
+        $out/bin/*.yaml \
+        $out/bin/*.py \
+        $benchmark/bin
       ${lib.optionalString buildTests ''
         mkdir -p $test/bin
         mv $out/bin/hipblas-test $test/bin

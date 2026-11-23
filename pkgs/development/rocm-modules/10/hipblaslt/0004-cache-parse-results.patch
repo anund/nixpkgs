@@ -1,0 +1,139 @@
+From f60b0f85e1d445acce80bfb67d3953a81a6fe1d3 Mon Sep 17 00:00:00 2001
+From: Anund <anundm@gmail.com>
+Date: Mon, 9 Nov 2026 00:02:42 +1100
+Subject: [PATCH 4/5] cache parse results
+
+---
+ .../tensilelite/Tensile/Contractions.py       | 52 +++++++++++++++++++
+ .../Tensile/TensileCreateLibrary/Run.py       | 10 ++--
+ 2 files changed, 58 insertions(+), 4 deletions(-)
+
+diff --git a/projects/hipblaslt/tensilelite/Tensile/Contractions.py b/projects/hipblaslt/tensilelite/Tensile/Contractions.py
+index 3d44bf8db8b..e63c1d5b763 100644
+--- a/projects/hipblaslt/tensilelite/Tensile/Contractions.py
++++ b/projects/hipblaslt/tensilelite/Tensile/Contractions.py
+@@ -40,6 +40,7 @@ MIN_K_FOR_GSU = 32
+ @state_key_ordering
+ class FreeIndex:
+     StateKeys = ['isA', 'i', 'c', 'd']
++    __slots__ = ['isA', 'i', 'c', 'd', 'a', 'b']
+ 
+     def __init__(self, isA, i=None, c=None, d=None):
+         self.isA = isA
+@@ -50,6 +51,7 @@ class FreeIndex:
+ @state_key_ordering
+ class BatchIndex:
+     StateKeys = ['a', 'b', 'c', 'd']
++    __slots__ = ['a', 'b', 'c', 'd']
+     def __init__(self, a=None, b=None, c=None, d=None):
+         self.a = a
+         self.b = b
+@@ -59,6 +61,7 @@ class BatchIndex:
+ @state_key_ordering
+ class BoundIndex:
+     StateKeys = ['a', 'b', 'aMirror', 'bMirror']
++    __slots__ = ['a', 'b', 'aMirror', 'bMirror']
+     def __init__(self, a=None, b=None, aMirror=False, bMirror=False):
+         self.a = a
+         self.b = b
+@@ -66,6 +69,38 @@ class BoundIndex:
+         self.bMirror = bMirror
+ 
+ 
++# Interning helpers to reduce memory usage by reusing identical objects
++# Index objects are immutable after ProblemType.FromOriginalState() finishes
++_free_index_cache = {}
++def intern_free_index(isA, i=None, c=None, d=None, a=None, b=None):
++    key = (isA, i, c, d, a, b)
++    obj = _free_index_cache.get(key)
++    if obj is None:
++        obj = FreeIndex(isA, i, c, d)
++        obj.a = a
++        obj.b = b
++        _free_index_cache[key] = obj
++    return obj
++
++_batch_index_cache = {}
++def intern_batch_index(a=None, b=None, c=None, d=None):
++    key = (a, b, c, d)
++    obj = _batch_index_cache.get(key)
++    if obj is None:
++        obj = BatchIndex(a=a, b=b, c=c, d=d)
++        _batch_index_cache[key] = obj
++    return obj
++
++_bound_index_cache = {}
++def intern_bound_index(a=None, b=None, aMirror=False, bMirror=False):
++    key = (a, b, aMirror, bMirror)
++    obj = _bound_index_cache.get(key)
++    if obj is None:
++        obj = BoundIndex(a=a, b=b, aMirror=aMirror, bMirror=bMirror)
++        _bound_index_cache[key] = obj
++    return obj
++
++
+ class ProblemType:
+     StateKeys = ['operationIdentifier', 'transA', 'transB', 'computeInputTypeA', 'computeInputTypeB', 'aType', 'bType', 'cType', 'dType', 'eType', 'computeType',
+                  'useBeta', 'useBias', 'biasSrcWhiteList', 'useE', 'useGateResidual', 'gateResidualDataTypeWhiteList', 'useScaleAB', 'useScaleCD', 'useScaleAlphaVec', 'biasDataTypeWhiteList',
+@@ -108,6 +143,22 @@ class ProblemType:
+         for ib, ic in enumerate(d['IndexAssignmentsB']):
+             indices[ic].b = ib
+ 
++        # Intern all indices now that .a/.b are final, capping memory usage
++        for i, idx in enumerate(indices):
++            if isinstance(idx, FreeIndex):
++                indices[i] = intern_free_index(idx.isA, idx.i, idx.c, idx.d,
++                                               getattr(idx, 'a', None), getattr(idx, 'b', None))
++            elif isinstance(idx, BatchIndex):
++                indices[i] = intern_batch_index(getattr(idx, 'a', None), getattr(idx, 'b', None),
++                                                idx.c, idx.d)
++            elif isinstance(idx, BoundIndex):
++                indices[i] = intern_bound_index(getattr(idx, 'a', None), getattr(idx, 'b', None),
++                                                idx.aMirror, idx.bMirror)
++
++        freeIndices = [idx for idx in indices if isinstance(idx, FreeIndex)]
++        batchIndices = [idx for idx in indices if isinstance(idx, BatchIndex)]
++        boundIndices = [idx for idx in indices if isinstance(idx, BoundIndex)]
++
+         for idx in indices:
+             assert idx is not None
+             idxState = state(idx)
+@@ -680,6 +731,7 @@ class SizeMapping:
+                  'ExpertSchedulingMode',
+                  'clusterDim'
+                  ]
++    __slots__ = StateKeys
+ 
+     @classmethod
+     def FromOriginalState(cls, d):
+diff --git a/projects/hipblaslt/tensilelite/Tensile/TensileCreateLibrary/Run.py b/projects/hipblaslt/tensilelite/Tensile/TensileCreateLibrary/Run.py
+index 9c4cae1bf3d..d6716b24f00 100644
+--- a/projects/hipblaslt/tensilelite/Tensile/TensileCreateLibrary/Run.py
++++ b/projects/hipblaslt/tensilelite/Tensile/TensileCreateLibrary/Run.py
+@@ -360,8 +360,9 @@ def passPostKernelInfoToLibrary(results, kernels, masterLibraries, splitGSU: boo
+                     sol.sizeMapping.CUOccupancy = result.cuoccupancy
+                     sol.sizeMapping.MathClocksUnrolledLoop = result.mathclk
+                     sol.sizeMapping.PrefetchGlobalRead = sol.originalSolution._state['PrefetchGlobalRead']
+-                    sol.sizeMapping.NonTemporalA = sol.originalSolution._state['NonTemporalA']
+-                    sol.sizeMapping.NonTemporalB = sol.originalSolution._state['NonTemporalB']
++                    # casing difference bug? exposed by caching.
++                    sol.sizeMapping.nonTemporalA = sol.originalSolution._state['NonTemporalA']
++                    sol.sizeMapping.nonTemporalB = sol.originalSolution._state['NonTemporalB']
+                     sol.sizeMapping.adaptiveGemmNTAB = sol.originalSolution._state.get('AdaptiveGemmNTAB', 0)
+                     sol.sizeMapping.NonTemporalD = sol.originalSolution._state['NonTemporalD']
+                     sol.sizeMapping.WaveSeparateGlobalReadA = sol.originalSolution._state['WaveSeparateGlobalReadA']
+@@ -390,8 +391,9 @@ def passPostKernelInfoToLibrary(results, kernels, masterLibraries, splitGSU: boo
+                         sol.sizeMapping.CUOccupancy = result.cuoccupancy
+                         sol.sizeMapping.MathClocksUnrolledLoop = result.mathclk
+                         sol.sizeMapping.PrefetchGlobalRead = sol.originalSolution._state['PrefetchGlobalRead']
+-                        sol.sizeMapping.NonTemporalA = sol.originalSolution._state['NonTemporalA']
+-                        sol.sizeMapping.NonTemporalB = sol.originalSolution._state['NonTemporalB']
++                        # casing difference bug? exposed by caching.
++                        sol.sizeMapping.nonTemporalA = sol.originalSolution._state['NonTemporalA']
++                        sol.sizeMapping.nonTemporalB = sol.originalSolution._state['NonTemporalB']
+                         sol.sizeMapping.adaptiveGemmNTAB = sol.originalSolution._state.get('AdaptiveGemmNTAB', 0)
+                         sol.sizeMapping.NonTemporalD = sol.originalSolution._state['NonTemporalD']
+                         sol.sizeMapping.WaveSeparateGlobalReadA = sol.originalSolution._state['WaveSeparateGlobalReadA']
+-- 
+2.56.0
+

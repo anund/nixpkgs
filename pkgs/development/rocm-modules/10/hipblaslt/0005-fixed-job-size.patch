@@ -1,0 +1,35 @@
+From 872cbf789ab43c1cfe0cd4e75db10fc68cc0694b Mon Sep 17 00:00:00 2001
+From: Anund <anundm@gmail.com>
+Date: Thu, 12 Nov 2026 17:36:54 +1100
+Subject: [PATCH 5/5] fixed job size
+
+---
+ projects/hipblaslt/cmake/HipBLASLtCodegen.cmake | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/projects/hipblaslt/cmake/HipBLASLtCodegen.cmake b/projects/hipblaslt/cmake/HipBLASLtCodegen.cmake
+index d4651bc766a..aabbc3684be 100644
+--- a/projects/hipblaslt/cmake/HipBLASLtCodegen.cmake
++++ b/projects/hipblaslt/cmake/HipBLASLtCodegen.cmake
+@@ -82,6 +82,10 @@ function(hipblaslt_create_device_library)
+ 
+     set(_known_bugs "${_codegen_dir}/Tensile/TensileLogic/known_bugs.yaml")
+     set(_logic_stamp "${CMAKE_CURRENT_BINARY_DIR}/${_cdl_TARGET}-TensileLogic.stamp")
++    set(_logic_jobs "")
++    if(NOT "$ENV{NIX_BUILD_CORES}" STREQUAL "")
++        set(_logic_jobs "--jobs=$ENV{NIX_BUILD_CORES}")
++    endif()
+     add_custom_command(
+         OUTPUT "${_logic_stamp}"
+         COMMENT "Validating library logic (TensileLogic --check-all) for ${_cdl_TARGET} ..."
+@@ -91,6 +95,7 @@ function(hipblaslt_create_device_library)
+             --known-bugs
+             "${_known_bugs}"
+             --check-all
++            "${_logic_jobs}"
+         COMMAND ${CMAKE_COMMAND} -E touch "${_logic_stamp}"
+         DEPENDS ${HIPBLASLT_PYTHON_DEPS} "${_known_bugs}"
+         VERBATIM
+-- 
+2.56.0
+

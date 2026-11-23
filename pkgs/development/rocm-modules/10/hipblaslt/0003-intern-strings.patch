@@ -1,0 +1,34 @@
+From 202e456a35a00651e817562c3c72c6b08f65c55c Mon Sep 17 00:00:00 2001
+From: Anund <anundm@gmail.com>
+Date: Mon, 9 Nov 2026 00:01:16 +1100
+Subject: [PATCH 3/5] intern strings
+
+---
+ projects/hipblaslt/tensilelite/Tensile/CustomYamlLoader.py | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/projects/hipblaslt/tensilelite/Tensile/CustomYamlLoader.py b/projects/hipblaslt/tensilelite/Tensile/CustomYamlLoader.py
+index 4da0547874a..0e1855e1760 100644
+--- a/projects/hipblaslt/tensilelite/Tensile/CustomYamlLoader.py
++++ b/projects/hipblaslt/tensilelite/Tensile/CustomYamlLoader.py
+@@ -1,6 +1,7 @@
+ # Copyright © Advanced Micro Devices, Inc., or its affiliates.
+ # SPDX-License-Identifier: MIT
+ 
++import sys
+ import yaml
+ from pathlib import Path
+ 
+@@ -72,7 +73,8 @@ def parse_scalar(loader: yaml.Loader):
+     elif is_float(value_lower):
+         return float(value_lower)
+ 
+-    return value
++    # Save repeated us of the same name/value pairs across all logic files
++    return sys.intern(value)
+ 
+ def load_yaml_stream(yaml_path: Path, loader_type: yaml.Loader):
+     with open(yaml_path, 'r') as f:
+-- 
+2.56.0
+

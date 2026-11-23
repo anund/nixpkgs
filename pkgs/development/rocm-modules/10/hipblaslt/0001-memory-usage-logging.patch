@@ -1,0 +1,110 @@
+From 714daa105775fbb23570085c525bdb2f988abbf5 Mon Sep 17 00:00:00 2001
+From: Anund <anundm@gmail.com>
+Date: Sun, 8 Nov 2026 21:20:20 +1100
+Subject: [PATCH 1/5] memory usage logging
+
+---
+ .../Tensile/TensileCreateLibrary/Run.py       | 44 +++++++++++++++++++
+ 1 file changed, 44 insertions(+)
+
+diff --git a/projects/hipblaslt/tensilelite/Tensile/TensileCreateLibrary/Run.py b/projects/hipblaslt/tensilelite/Tensile/TensileCreateLibrary/Run.py
+index 8477c98e1f4..367ff02f40a 100644
+--- a/projects/hipblaslt/tensilelite/Tensile/TensileCreateLibrary/Run.py
++++ b/projects/hipblaslt/tensilelite/Tensile/TensileCreateLibrary/Run.py
+@@ -29,6 +29,10 @@ import functools
+ import glob
+ import itertools
+ import os
++try:
++    import resource
++except ImportError:
++    resource = None
+ import shutil
+ import pickle
+ import zlib
+@@ -88,6 +92,38 @@ from Tensile.Utilities.Decorators.Timing import timing
+ from .ParseArguments import parseArguments
+ 
+ 
++def getMemoryUsage():
++    """Get peak and current memory usage in MB.
++
++    Peak comes from getrusage(RUSAGE_SELF).Current RSS comes from
++    /proc/self/status (Linux only); falls back to the peak value when
++    unavailable.
++    """
++    peak_memory_mb = 0.0
++    if resource is not None:
++        peak_memory_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
++
++    current_memory_mb = None
++    try:
++        with open('/proc/self/status') as f:
++            for line in f:
++                if line.startswith('VmRSS:'):
++                    current_memory_mb = int(line.split()[1]) / 1024
++                    break
++    except (OSError, ValueError):
++        pass
++    if current_memory_mb is None:
++        current_memory_mb = peak_memory_mb
++
++    return (peak_memory_mb, current_memory_mb)
++
++
++def logMemoryUsage(phase: str):
++    """Log current/peak RSS after a build phase to track where memory grows."""
++    peak_memory_mb, current_memory_mb = getMemoryUsage()
++    print(f"Memory after {phase}: current={current_memory_mb:,.1f} MB, peak={peak_memory_mb:,.1f} MB")
++
++
+ def libraryRoot(outputPath: Union[str, Path]) -> Path:
+     """The library/ root directory under outputPath.
+ 
+@@ -1071,6 +1107,7 @@ def run():
+     )
+     stop_glds = timer()
+     print(f"Time to load yaml files (s): {(stop_glds-start_glds):3.2f}")
++    logMemoryUsage("loading yaml files")
+ 
+ 
+     kernels = generateKernelObjectsFromSolutions(solutions)
+@@ -1095,6 +1132,7 @@ def run():
+     )
+     stop_wsk = timer()
+     print(f"Time to generate kernels (s): {(stop_wsk-start_wsk):3.2f}")
++    logMemoryUsage("generating kernels")
+ 
+     archs = [ # is this really different than the other archs above?
+         isaToGfx(arch)
+@@ -1112,6 +1150,7 @@ def run():
+     passPostKernelInfoToLibrary(kernelInfo, uniqueKernels, masterLibraries, splitGSU)
+     stop_pki = timer()
+     print(f"Time to pass kernel info to library (s): {(stop_pki-start_pki):3.2f}")
++    logMemoryUsage("passing kernel info to library")
+ 
+     solDict = {}
+     for solution in solutions:
+@@ -1162,6 +1201,7 @@ def run():
+                          return_as="list")
+     stop_msl = timer()
+     print(f"Time to write master solution libraries (s): {(stop_msl-start_msl):3.2f}")
++    logMemoryUsage("writing master solution libraries")
+ 
+     if not arguments["KeepBuildTmp"]:
+         buildTmp = Path(arguments["OutputPath"]).parent / "library" / "build_tmp"
+@@ -1179,7 +1219,11 @@ def run():
+ 
+     stop = timer()
+ 
++    peak_memory_mb, current_memory_mb = getMemoryUsage()
++
+     print(f"Total time (s): {(stop-start):3.2f}")
+     print(f"Total kernels processed: {numKernels}")
+     print(f"Kernels processed per second: {(numKernels/(stop-start)):3.2f}")
+     print(f"KernelHelperObjs: {len(kernelHelperObjs)}")
++    print(f"Peak memory usage (MB): {peak_memory_mb:,.1f}")
++    print(f"Current memory usage (MB): {current_memory_mb:,.1f}")
+-- 
+2.56.0
+

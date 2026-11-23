@@ -158,6 +158,9 @@ let
       rocmlir-rock = self.callPackage ./rocmlir {
         buildRockCompiler = true;
       };
+      rocmlir-triton = self.callPackage ./rocmlir-triton {
+        buildRockCompiler = true;
+      };
 
       #hipsolver = self.callPackage ./hipsolver { };
 

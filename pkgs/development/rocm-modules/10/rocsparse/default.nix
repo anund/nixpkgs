@@ -9,6 +9,7 @@
   rocprim,
   rocblas,
   clr,
+  roctracer,
   gfortran,
   gtest,
   boost,
@@ -20,7 +21,7 @@
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "rocsparse${clr.gpuArchSuffix}";
-  version = "7.2.4";
+  version = "10.0";
 
   outputs = [
     "out"
@@ -35,12 +36,12 @@ stdenv.mkDerivation (finalAttrs: {
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "rocm-libraries";
-    tag = "rocm-${finalAttrs.version}";
+    tag = "therock-${finalAttrs.version}";
     sparseCheckout = [
       "projects/rocsparse"
       "shared"
     ];
-    hash = "sha256-hkfBTcLig39al2w8zFTSQQnouaou9wlD6VlvIyFTNMg=";
+    hash = "sha256-EJMDypjRu/+v5aj21TAKWpCUsdL80mnEYHCZCf7LpVw=";
   };
   sourceRoot = "${finalAttrs.src.name}/projects/rocsparse";
 
@@ -55,6 +56,7 @@ stdenv.mkDerivation (finalAttrs: {
   buildInputs = [
     rocprim
     rocblas
+    roctracer
   ]
   ++ lib.optionals (buildTests || buildBenchmarks) [
     gtest
@@ -72,7 +74,7 @@ stdenv.mkDerivation (finalAttrs: {
     "-DCMAKE_INSTALL_INCLUDEDIR=include"
   ]
   ++ lib.optionals (gpuTargets != [ ]) [
-    "-DAMDGPU_TARGETS=${lib.concatStringsSep ";" gpuTargets}"
+    "-DGPU_TARGETS=${lib.concatStringsSep ";" gpuTargets}"
   ]
   ++ lib.optionals (buildTests || buildBenchmarks) [
     "-DBUILD_CLIENTS_TESTS=ON"

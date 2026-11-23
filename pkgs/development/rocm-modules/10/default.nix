@@ -112,7 +112,7 @@ let
 
       rocprim = self.callPackage ./rocprim { };
 
-      #rocsparse = self.callPackage ./rocsparse { };
+      rocsparse = self.callPackage ./rocsparse { };
 
       rocthrust = self.callPackage ./rocthrust { };
 

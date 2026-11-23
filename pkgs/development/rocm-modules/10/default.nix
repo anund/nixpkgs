@@ -145,7 +145,7 @@ let
           ;
       };
 
-      #rocblas = self.callPackage ./rocblas { };
+      rocblas = self.callPackage ./rocblas { };
 
       #rocsolver = self.callPackage ./rocsolver { };
 

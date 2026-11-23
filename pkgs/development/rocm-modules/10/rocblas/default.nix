@@ -2,7 +2,6 @@
   lib,
   stdenv,
   fetchFromGitHub,
-  fetchpatch,
   rocmUpdateScript,
   cmake,
   rocm-cmake,
@@ -23,7 +22,7 @@
   hipblas-common,
   hipblaslt,
   python3Packages,
-  rocm-smi,
+  amdsmi,
   pkg-config,
   removeReferencesTo,
   buildTensile ? true,
@@ -40,17 +39,17 @@ let
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "rocblas${clr.gpuArchSuffix}";
-  version = "7.2.4";
+  version = "10.0";
 
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "rocm-libraries";
-    tag = "rocm-${finalAttrs.version}";
+    tag = "therock-${finalAttrs.version}";
     sparseCheckout = [
       "projects/rocblas"
       "shared"
     ];
-    hash = "sha256-wrjcr2ASSF+bk5atjvKfIYSbg+vevo/a2W2ca9Nft/4=";
+    hash = "sha256-8LdII9gSFxuBeJwfQgOW+1/M33nbuR6TwcrD4k6W0Oo=";
   };
   sourceRoot = "${finalAttrs.src.name}/projects/rocblas";
 
@@ -89,7 +88,7 @@ stdenv.mkDerivation (finalAttrs: {
   ++ lib.optionals (buildTests || buildBenchmarks) [
     gtest
     gfortran
-    rocm-smi
+    amdsmi
   ]
   ++ lib.optionals (buildTensile || buildTests || buildBenchmarks) [
     python3Packages.pyyaml
@@ -126,26 +125,17 @@ stdenv.mkDerivation (finalAttrs: {
     "-DCMAKE_INSTALL_LIBDIR=lib"
   ]
   ++ lib.optionals buildTensile [
-    "-DCPACK_SET_DESTDIR=OFF"
-    "-DLINK_BLIS=ON"
-    "-DBLAS_LIBRARY=${amd-blis}/lib/libblis-mt.so"
-    "-DBLIS_INCLUDE_DIR=${amd-blis}/include/blis/"
-    "-DBLA_PREFER_PKGCONFIG=ON"
-    "-DTensile_CODE_OBJECT_VERSION=default"
-    "-DTensile_LOGIC=asm_full"
-    "-DTensile_LIBRARY_FORMAT=msgpack"
+    (lib.cmakeFeature "CPACK_SET_DESTDIR" "OFF")
+    (lib.cmakeFeature "LINK_BLIS" "ON")
+    (lib.cmakeFeature "BLAS_LIBRARY" "${amd-blis}/lib/libblis-mt.so")
+    (lib.cmakeFeature "BLIS_INCLUDE_DIR" "${amd-blis}/include/blis/")
+    (lib.cmakeFeature "BLA_PREFER_PKGCONFIG" "ON")
+    (lib.cmakeFeature "Tensile_CODE_OBJECT_VERSION" "default")
+    (lib.cmakeFeature "Tensile_LOGIC" "asm_full")
+    (lib.cmakeFeature "Tensile_LIBRARY_FORMAT" "msgpack")
     (lib.cmakeBool "BUILD_WITH_PIP" false)
     (lib.cmakeBool "Tensile_SEPARATE_ARCHITECTURES" tensileSepArch)
     (lib.cmakeBool "Tensile_LAZY_LIBRARY_LOADING" tensileLazyLib)
-  ];
-
-  patches = [
-    (fetchpatch {
-      name = "Extend-rocBLAS-HIP-ISA-compatibility.patch";
-      url = "https://github.com/GZGavinZhao/rocm-libraries/commit/49f21f3cfe7eb4b8ac724eef81fa2cae97a3c22e.patch";
-      hash = "sha256-vAVVpTwt49lGHu2YopR1X68v5LwFOjUYuSC4ucBpFGg=";
-      relative = "projects/rocblas";
-    })
   ];
 
   # Pass $NIX_BUILD_CORES to Tensile
@@ -181,6 +171,7 @@ stdenv.mkDerivation (finalAttrs: {
     ''
     + lib.optionalString buildTests ''
       moveToOutput "bin/*test*" "$test"
+      moveToOutput "bin/rocblas" "$test"
       cp "$out/bin/"*.{yaml,txt} "$test/bin"
     ''
     + ''

@@ -126,6 +126,8 @@ let
 
       rocshmem = self.callPackage ./rocshmem { };
 
+      hipfile = self.callPackage ./hipfile { };
+
       hipcub = self.callPackage ./hipcub { };
 
       #hipsparse = self.callPackage ./hipsparse { };

@@ -153,10 +153,11 @@ let
 
       #rocalution = self.callPackage ./rocalution { };
 
-      #rocmlir-rock = self.callPackage ./rocmlir {
-      #  buildRockCompiler = true;
-      #};
-      #rocmlir = self.rocmlir-rock;
+      rocmlir = self.rocmlir-rock;
+      # 2026-10-20: no 10.0 update available
+      rocmlir-rock = self.callPackage ./rocmlir {
+        buildRockCompiler = true;
+      };
 
       #hipsolver = self.callPackage ./hipsolver { };
 

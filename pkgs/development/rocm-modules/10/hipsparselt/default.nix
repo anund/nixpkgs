@@ -8,7 +8,7 @@
   git,
   pkg-config,
   rocm-cmake,
-  rocm-smi,
+  amdsmi,
   clr,
   hipsparse,
   openmp,
@@ -19,17 +19,20 @@
   zstd,
   python3,
   python3Packages,
-  # hipsparselt only supports gfx942/gfx950
-  gpuTargets ? (clr.localGpuTargets or clr.gpuTargets),
+  writableTmpDirAsHomeHook,
+  # hipsparselt only supports gfx942/gfx950/gfx1250
+  gpuTargets ? (clr.localGpuTargets or [ ]),
 }:
 
 let
-  supportedTargets = (
-    lib.lists.intersectLists gpuTargets [
+  # https://github.com/ROCm/rocm-libraries/blob/therock-10.0/projects/hipsparselt/cmake/hipsparselt_supported_architectures.cmake#L10-L21
+  librarySupportedTargets = [
       "gfx942"
       "gfx950"
-    ]
-  );
+      "gfx1250" # not in 10.0 compatibility matrix, only in library
+    ];
+  supportedTargets =
+    lib.lists.filter (x: gpuTargets == [ ] || lib.elem x gpuTargets) librarySupportedTargets;
   supportsTargetArches = supportedTargets != [ ];
   py = python3.withPackages (ps: [
     ps.pyyaml
@@ -43,22 +46,32 @@ let
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "hipsparselt${clr.gpuArchSuffix}";
-  version = "7.2.4";
+  version = "10.0";
 
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "rocm-libraries";
-    tag = "rocm-${finalAttrs.version}";
-    hash = "sha256-Al/0yZPn/wqtBFQU1FcGoSquDMObk6HQ3D5sSh5biHg=";
+    tag = "therock-${finalAttrs.version}";
+    hash = "sha256-J4yhAACW7Iha62DLayhVLMbxuncsq36B81eDALw8P6E=";
     sparseCheckout = [
       "projects/hipsparselt"
+      # TODO: stop building hipblaslt from source, needs a 10.1+ release
+      # https://github.com/ROCm/rocm-libraries/pull/11726
       "projects/hipblaslt/tensilelite"
       "projects/hipblaslt/cmake"
       "projects/hipblaslt/device-library"
-      "shared/origami"
+      "projects/hipblaslt/library/include"
+      "shared"
     ];
   };
   sourceRoot = "${finalAttrs.src.name}/projects/hipsparselt";
+
+  postPatch = ''
+    # linting tool that lives in <root>/cmake/modules/ so isn't present in sparse checkout
+    substituteInPlace ../../shared/stinkytofu/CMakeLists.txt \
+      --replace-fail 'include(ClangTidy)' "" \
+      --replace-fail 'add_clang_tidy_custom_target()' ""
+  '';
 
   env.CXX = compiler;
   env.ROCM_PATH = "${clr}";
@@ -75,9 +88,10 @@ stdenv.mkDerivation (finalAttrs: {
     git
     pkg-config
     rocm-cmake
-    rocm-smi
+    amdsmi
     py
     clr
+    writableTmpDirAsHomeHook
   ];
 
   buildInputs = [
@@ -99,8 +113,6 @@ stdenv.mkDerivation (finalAttrs: {
     (lib.cmakeBool "HIPSPARSELT_ENABLE_CLIENT" false)
     (lib.cmakeBool "HIPSPARSELT_BUILD_TESTING" false)
     (lib.cmakeBool "HIPSPARSELT_ENABLE_MARKER" false)
-    (lib.cmakeBool "HIPBLASLT_ENABLE_ROCROLLER" false)
-    (lib.cmakeBool "HIPBLASLT_ENABLE_MARKER" false)
     (lib.cmakeFeature "CMAKE_C_COMPILER" "amdclang")
     (lib.cmakeFeature "CMAKE_HIP_COMPILER" compiler)
     (lib.cmakeFeature "CMAKE_CXX_COMPILER" compiler)
@@ -111,6 +123,7 @@ stdenv.mkDerivation (finalAttrs: {
   ];
 
   passthru.supportsTargetArches = supportsTargetArches;
+  passthru.supportedTargets = supportedTargets;
   passthru.updateScript = rocmUpdateScript { inherit finalAttrs; };
 
   meta = {

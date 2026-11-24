@@ -170,7 +170,7 @@ let
 
       hipblaslt = self.callPackage ./hipblaslt { };
 
-      #hipsparselt = self.callPackage ./hipsparselt { };
+      hipsparselt = self.callPackage ./hipsparselt { };
 
       composable_kernel_base = self.callPackage ./composable_kernel/base.nix { };
       composable_kernel = self.callPackage ./composable_kernel { };

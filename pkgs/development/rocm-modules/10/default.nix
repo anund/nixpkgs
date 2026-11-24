@@ -188,7 +188,7 @@ let
 
       miopen-hip = self.miopen;
 
-      #migraphx = self.callPackage ./migraphx { stdenv = origStdenv; };
+      migraphx = self.callPackage ./migraphx { stdenv = origStdenv; };
 
       rpp = self.callPackage ./rpp { };
 

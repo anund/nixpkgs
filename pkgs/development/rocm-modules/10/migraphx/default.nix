@@ -65,7 +65,7 @@ let
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "migraphx";
-  version = "7.2.4";
+  version = "10.0";
 
   outputs = [
     "out"
@@ -81,8 +81,13 @@ stdenv.mkDerivation (finalAttrs: {
     owner = "ROCm";
     repo = "AMDMIGraphX";
     tag = "rocm-${finalAttrs.version}";
-    hash = "sha256-oDVJn2vwSoLxrA5ynRduZ3uRR8XhBa0pAf3Vyx7o3HE=";
+    hash = "sha256-1mpNIW2uENv++vwfqR8qTXvti5pogwv5MVeWqlyMwzo=";
   };
+
+  patches = [
+    # rocm_add_version_resource does not exist in rocm-cmake until after 10.1+
+    ./fix-missing-cmake-function.patch
+  ];
 
   nativeBuildInputs = [
     pkg-config

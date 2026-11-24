@@ -12,7 +12,8 @@
   rocsparse,
   suitesparse,
   gtest,
-  lapack-reference,
+  blas,
+  lapack,
   buildTests ? false,
   buildBenchmarks ? false,
   buildSamples ? false,
@@ -21,7 +22,7 @@
 # Can also use cuSOLVER
 stdenv.mkDerivation (finalAttrs: {
   pname = "hipsolver";
-  version = "7.2.4";
+  version = "10.0";
 
   outputs = [
     "out"
@@ -39,12 +40,12 @@ stdenv.mkDerivation (finalAttrs: {
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "rocm-libraries";
-    tag = "rocm-${finalAttrs.version}";
+    tag = "therock-${finalAttrs.version}";
     sparseCheckout = [
       "projects/hipsolver"
       "shared"
     ];
-    hash = "sha256-ts5wuXHoBFZ1WMAk8Ir5cucP75G0SMOWmn3FEH04ZEQ=";
+    hash = "sha256-E9WxBfJ5CUCgDdIF05Uy80HfId+ZJSxG5k51jaWNyEw=";
   };
   sourceRoot = "${finalAttrs.src.name}/projects/hipsolver";
 
@@ -56,6 +57,8 @@ stdenv.mkDerivation (finalAttrs: {
   ];
 
   buildInputs = [
+    blas
+    lapack
     rocblas
     rocsolver
     rocsparse
@@ -63,28 +66,27 @@ stdenv.mkDerivation (finalAttrs: {
   ]
   ++ lib.optionals buildTests [
     gtest
-  ]
-  ++ lib.optionals (buildTests || buildBenchmarks) [
-    lapack-reference
   ];
 
   cmakeFlags = [
-    "-DCMAKE_CXX_COMPILER=hipcc"
+    (lib.cmakeFeature "CMAKE_CXX_COMPILER" "hipcc")
     # Manually define CMAKE_INSTALL_<DIR>
     # See: https://github.com/NixOS/nixpkgs/pull/197838
-    "-DCMAKE_INSTALL_BINDIR=bin"
-    "-DCMAKE_INSTALL_LIBDIR=lib"
-    "-DCMAKE_INSTALL_INCLUDEDIR=include"
-    "-DBUILD_WITH_SPARSE=OFF" # FIXME: broken - can't find suitesparse/cholmod, looks fixed in master
+    (lib.cmakeFeature "CMAKE_INSTALL_BINDIR" "bin")
+    (lib.cmakeFeature "CMAKE_INSTALL_LIBDIR" "lib")
+    (lib.cmakeFeature "CMAKE_INSTALL_INCLUDEDIR" "include")
+    # use system lapack
+    (lib.cmakeFeature "HIPSOLVER_INTERNAL_LAPACK_BUILD" "OFF")
+    (lib.cmakeFeature "HIPSOLVER_FIND_PACKAGE_LAPACK_CONFIG" "OFF")
   ]
   ++ lib.optionals buildTests [
-    "-DBUILD_CLIENTS_TESTS=ON"
+    (lib.cmakeFeature "BUILD_CLIENTS_TESTS" "ON")
   ]
   ++ lib.optionals buildBenchmarks [
-    "-DBUILD_CLIENTS_BENCHMARKS=ON"
+    (lib.cmakeFeature "BUILD_CLIENTS_BENCHMARKS" "ON")
   ]
   ++ lib.optionals buildSamples [
-    "-DBUILD_CLIENTS_SAMPLES=ON"
+    (lib.cmakeFeature "BUILD_CLIENTS_SAMPLES" "ON")
   ];
 
   postInstall =

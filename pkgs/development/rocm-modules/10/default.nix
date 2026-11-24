@@ -162,7 +162,7 @@ let
         buildRockCompiler = true;
       };
 
-      #hipsolver = self.callPackage ./hipsolver { };
+      hipsolver = self.callPackage ./hipsolver { };
 
       hipblas-common = self.callPackage ./hipblas-common { };
 

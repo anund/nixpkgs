@@ -149,7 +149,7 @@ let
 
       #rocsolver = self.callPackage ./rocsolver { };
 
-      #rocwmma = self.callPackage ./rocwmma { };
+      rocwmma = self.callPackage ./rocwmma { };
 
       #rocalution = self.callPackage ./rocalution { };
 

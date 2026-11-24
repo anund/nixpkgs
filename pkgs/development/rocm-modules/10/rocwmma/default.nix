@@ -5,7 +5,7 @@
   rocmUpdateScript,
   cmake,
   rocm-cmake,
-  rocm-smi,
+  amdsmi,
   clr,
   openmp,
   gtest,
@@ -19,7 +19,7 @@
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "rocwmma";
-  version = "7.2.4";
+  version = "10.0";
 
   outputs = [
     "out"
@@ -37,18 +37,14 @@ stdenv.mkDerivation (finalAttrs: {
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "rocm-libraries";
-    tag = "rocm-${finalAttrs.version}";
+    tag = "therock-${finalAttrs.version}";
     sparseCheckout = [
       "projects/rocwmma"
       "shared"
     ];
-    hash = "sha256-eoF8a7zknpgvDOSDzolOrdtszUJ5tC7Ur2sRShiQEO0=";
+    hash = "sha256-vN0s7lDUK9lEi3jClGZzouWi9Vej0v/gsTe707m+oE0=";
   };
   sourceRoot = "${finalAttrs.src.name}/projects/rocwmma";
-
-  patches = lib.optionals (buildTests || buildBenchmarks) [
-    ./0000-dont-fetch-googletest.patch
-  ];
 
   nativeBuildInputs = [
     cmake
@@ -60,7 +56,7 @@ stdenv.mkDerivation (finalAttrs: {
     openmp
   ]
   ++ lib.optionals (buildTests || buildBenchmarks) [
-    rocm-smi
+    amdsmi
     gtest
     rocblas
   ];
@@ -83,6 +79,9 @@ stdenv.mkDerivation (finalAttrs: {
   ++ lib.optionals buildBenchmarks [
     "-DROCWMMA_BUILD_BENCHMARK_TESTS=ON"
     "-DROCWMMA_BENCHMARK_WITH_ROCBLAS=ON"
+  ]
+  ++ lib.optionals (buildTests || buildBenchmarks) [
+    "-DROCWMMA_USE_SYSTEM_GOOGLETEST=ON"
   ];
 
   postInstall =

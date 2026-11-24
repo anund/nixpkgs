@@ -147,7 +147,7 @@ let
 
       rocblas = self.callPackage ./rocblas { };
 
-      #rocsolver = self.callPackage ./rocsolver { };
+      rocsolver = self.callPackage ./rocsolver { };
 
       rocwmma = self.callPackage ./rocwmma { };
 

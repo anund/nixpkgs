@@ -15,29 +15,12 @@
   lapack-reference,
   buildTests ? false,
   buildBenchmarks ? false,
-  gpuTargets ? (
-    clr.localGpuTargets or [
-      "gfx900"
-      "gfx906"
-      "gfx908"
-      "gfx90a"
-      "gfx942"
-      "gfx1010"
-      "gfx1030"
-      "gfx1100"
-      "gfx1101"
-      "gfx1102"
-      "gfx1150"
-      "gfx1151"
-      "gfx1200"
-      "gfx1201"
-    ]
-  ),
+  gpuTargets ? (clr.localGpuTargets or [ ]),
 }:
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "rocsolver${clr.gpuArchSuffix}";
-  version = "7.2.4";
+  version = "10.0";
 
   outputs = [
     "out"
@@ -52,12 +35,12 @@ stdenv.mkDerivation (finalAttrs: {
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "rocm-libraries";
-    tag = "rocm-${finalAttrs.version}";
+    tag = "therock-${finalAttrs.version}";
     sparseCheckout = [
       "projects/rocsolver"
       "shared"
     ];
-    hash = "sha256-n+Y8RheA0UYeSfpvOw5zfwe4VAW5hsKjlCXtBceGhf0=";
+    hash = "sha256-JvY6zOgUMSeVNYP4VVvoXx8CcMv/6uQy1tb7BpsxcSg=";
   };
   sourceRoot = "${finalAttrs.src.name}/projects/rocsolver";
 
@@ -97,6 +80,7 @@ stdenv.mkDerivation (finalAttrs: {
     "-DCMAKE_INSTALL_INCLUDEDIR=include"
   ]
   ++ lib.optionals (gpuTargets != [ ]) [
+    #https://github.com/ROCm/rocm-libraries/blob/therock-10.0/projects/rocsolver/CMakeLists.txt#L173
     "-DAMDGPU_TARGETS=${lib.concatStringsSep ";" gpuTargets}"
   ]
   ++ lib.optionals buildTests [

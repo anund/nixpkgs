@@ -32,14 +32,15 @@ int main() {
 
     int failed_count = 0;
     for (const auto& model_file : model_files) {
-        std::cout << "Loading: " << model_file << " ... ";
+        std::cout << "Loading: " << model_file << " ... " << std::endl;
         std::cout.flush();
 
         try {
             const auto model = fdeep::load_model(model_file);
-            std::cout << "OK" << std::endl;
+            std::cout << "... OK" << std::endl;
         } catch (const std::exception& e) {
-            std::cout << "FAILED: " << e.what() << std::endl;
+            std::cout << std::endl << "... FAILED " << std::endl;
+            std::cout << "Reason: " << e.what() << std::endl;
             failed_count++;
         }
     }

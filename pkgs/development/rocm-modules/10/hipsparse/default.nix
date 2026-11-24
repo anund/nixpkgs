@@ -10,6 +10,7 @@
   gfortran,
   gtest,
   openmp,
+  python3,
   buildTests ? false,
   buildBenchmarks ? false,
   buildSamples ? false,
@@ -19,7 +20,7 @@
 # This can also use cuSPARSE as a backend instead of rocSPARSE
 stdenv.mkDerivation (finalAttrs: {
   pname = "hipsparse";
-  version = "7.2.4";
+  version = "10.0";
 
   outputs = [
     "out"
@@ -34,12 +35,12 @@ stdenv.mkDerivation (finalAttrs: {
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "rocm-libraries";
-    tag = "rocm-${finalAttrs.version}";
+    tag = "therock-${finalAttrs.version}";
     sparseCheckout = [
       "projects/hipsparse"
       "shared"
     ];
-    hash = "sha256-E1chG+giFtf02fjutoV4yM2XvrQKjgXRSvxs0NBBkvI=";
+    hash = "sha256-dipHvxi2urrTAAGYI+V8ueLJ81Lsg9Y1iqi8NQ6+6dI=";
   };
   sourceRoot = "${finalAttrs.src.name}/projects/hipsparse";
 
@@ -52,6 +53,7 @@ stdenv.mkDerivation (finalAttrs: {
 
   buildInputs = [
     rocsparse
+    python3
   ]
   ++ lib.optionals (buildTests || buildBenchmarks) [
     gtest

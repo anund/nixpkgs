@@ -22,7 +22,7 @@
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "rocalution";
-  version = "7.2.4";
+  version = "10.0";
 
   outputs = [
     "out"
@@ -39,10 +39,15 @@ stdenv.mkDerivation (finalAttrs: {
 
   src = fetchFromGitHub {
     owner = "ROCm";
-    repo = "rocALUTION";
-    tag = "rocm-${finalAttrs.version}";
-    hash = "sha256-yPM26e8tGNpPScIriAPRb+6OZfdpX4PgE0E9bmc3FkU=";
+    repo = "rocm-libraries";
+    tag = "therock-${finalAttrs.version}";
+    sparseCheckout = [
+      "projects/rocalution"
+      "shared"
+    ];
+    hash = "sha256-fIntHp+NCC7v1tOnRq8W3tOSuSpdreC7CpUhkhui8xs=";
   };
+  sourceRoot = "${finalAttrs.src.name}/projects/rocalution";
 
   nativeBuildInputs = [
     cmake

@@ -151,7 +151,7 @@ let
 
       rocwmma = self.callPackage ./rocwmma { };
 
-      #rocalution = self.callPackage ./rocalution { };
+      rocalution = self.callPackage ./rocalution { };
 
       rocmlir = self.rocmlir-rock;
       # 2026-10-20: no 10.0 update available

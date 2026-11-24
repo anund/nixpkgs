@@ -166,7 +166,7 @@ let
 
       hipblas-common = self.callPackage ./hipblas-common { };
 
-      #hipblas = self.callPackage ./hipblas { };
+      hipblas = self.callPackage ./hipblas { };
 
       hipblaslt = self.callPackage ./hipblaslt { };
 

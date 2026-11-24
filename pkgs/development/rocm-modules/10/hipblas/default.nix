@@ -13,6 +13,7 @@
   rocsparse,
   rocprim,
   gtest,
+  python3,
   lapack-reference,
   buildTests ? false,
   buildBenchmarks ? false,
@@ -24,7 +25,7 @@
 # Can also use cuBLAS
 stdenv.mkDerivation (finalAttrs: {
   pname = "hipblas";
-  version = "7.2.4";
+  version = "10.0";
 
   outputs = [
     "out"
@@ -42,12 +43,12 @@ stdenv.mkDerivation (finalAttrs: {
   src = fetchFromGitHub {
     owner = "ROCm";
     repo = "rocm-libraries";
-    tag = "rocm-${finalAttrs.version}";
+    tag = "therock-${finalAttrs.version}";
     sparseCheckout = [
       "projects/hipblas"
       "shared"
     ];
-    hash = "sha256-1+aNDotV5liHBnGddmWtaKYCcsWPxQD3AoEubnghV0M=";
+    hash = "sha256-/Pr+tj0uZaELnett+sRodpZdaKWE3uX96CKIOPvs5xI=";
   };
   sourceRoot = "${finalAttrs.src.name}/projects/hipblas";
 
@@ -70,6 +71,7 @@ stdenv.mkDerivation (finalAttrs: {
     rocprim
     rocsparse
     rocsolver
+    python3
   ]
   ++ lib.optionals buildTests [
     gtest
@@ -86,7 +88,7 @@ stdenv.mkDerivation (finalAttrs: {
     "-DCMAKE_INSTALL_LIBDIR=lib"
     "-DCMAKE_INSTALL_INCLUDEDIR=include"
     "-DBUILD_WITH_SOLVER=ON"
-    "-DAMDGPU_TARGETS=${rocblas.amdgpu_targets}"
+    "-DGPU_TARGETS=${rocblas.amdgpu_targets}"
   ]
   ++ lib.optionals buildTests [
     "-DBUILD_CLIENTS_TESTS=ON"
